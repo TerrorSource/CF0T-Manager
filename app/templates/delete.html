@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Verwijderen: {{ row.hostname }}{{ row.path }}</h1>
+<p class="sub">Kies wat er weg mag. Niets wordt verwijderd wat je niet aanvinkt.</p>
+
+<div class="panel">
+  <div class="panel-body">
+    <form method="post" action="/delete">
+      <input type="hidden" name="hostname" value="{{ row.hostname }}">
+      <input type="hidden" name="path" value="{{ row.path }}">
+
+      <div class="check">
+        <input type="checkbox" id="del_route" name="del_route" value="1" {% if row.has_route %}checked{% endif %} {% if not row.has_route %}disabled{% endif %}>
+        <label for="del_route">Tunnel-route
+          {% if row.has_route %}<span class="hint mono">{{ row.service }}</span>{% else %}<span class="hint">(bestaat niet)</span>{% endif %}
+        </label>
+      </div>
+      <div class="check">
+        <input type="checkbox" id="del_app" name="del_app" value="1" {% if row.has_app %}checked{% endif %} {% if not row.has_app %}disabled{% endif %}>
+        <label for="del_app">Access-applicatie
+          {% if row.has_app %}<span class="hint">{{ row.app_name }}</span>{% else %}<span class="hint">(bestaat niet)</span>{% endif %}
+        </label>
+      </div>
+      <div class="check">
+        <input type="checkbox" id="del_dns" name="del_dns" value="1">
+        <label for="del_dns">DNS-record
+          {% if row.dns %}<span class="hint mono">{{ row.dns.type }} → {{ row.dns.content }}</span>{% else %}<span class="hint">(geen record gevonden)</span>{% endif %}
+        </label>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn danger" type="submit">Definitief verwijderen</button>
+        <a class="btn" href="/">Annuleren</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}CFZeroTrustControl{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%23f6821f'/></svg>">
+</head>
+<body>
+{% if show_nav|default(true) %}
+<header class="topbar">
+  <span class="brand"><span class="dot"></span> CFZeroTrustControl</span>
+  <nav class="topnav">
+    <a href="/" class="{{ 'active' if active_page == 'index' }}">Overzicht</a>
+    <a href="/new" class="{{ 'active' if active_page == 'new' }}">Nieuwe applicatie</a>
+    <a href="/backup" class="{{ 'active' if active_page == 'backup' }}">Backup</a>
+    <a href="/setup" class="{{ 'active' if active_page == 'setup' }}">Instellingen</a>
+  </nav>
+  <span class="spacer"></span>
+  {% if tunnel_id %}<span class="tunnel-chip mono">tunnel {{ tunnel_id[:8] }}…</span>{% endif %}
+  {% if settings.auth_enabled %}
+  <form method="post" action="/logout"><button class="btn small">Uitloggen</button></form>
+  {% endif %}
+</header>
+{% endif %}
+<main>
+  {% if ok_msg %}<div class="flash ok">{{ ok_msg }}</div>{% endif %}
+  {% if err_msg %}<div class="flash err">{{ err_msg }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

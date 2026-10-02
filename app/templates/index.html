@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% set active_page = 'index' %}
+{% block content %}
+<h1>Applicaties</h1>
+<p class="sub">
+  {% if tunnel %}Tunnel <strong>{{ tunnel.name }}</strong>
+    <span class="badge {{ 'ok' if tunnel.status == 'healthy' else 'warn' }}">{{ tunnel.status }}</span> ·
+  {% endif %}
+  {{ rows|length }} hostname(s)
+</p>
+
+{% if meta.dns_error %}
+<div class="flash warn">DNS-status niet opgehaald ({{ meta.dns_error }}). De rest werkt gewoon.</div>
+{% endif %}
+
+<div class="toolbar">
+  <form method="get" action="/" style="flex:1; display:flex; gap:10px;">
+    <input type="search" name="q" value="{{ query }}" placeholder="Zoek op hostname, service of app-naam…">
+    <button class="btn" type="submit">Zoek</button>
+  </form>
+  <a class="btn primary" href="/new">+ Nieuwe applicatie</a>
+</div>
+
+<div class="panel">
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Hostname</th><th>Origin / service</th><th>Access-app</th>
+        <th>Policies</th><th>Status</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>
+          <a href="https://{{ row.hostname }}{{ row.path }}" target="_blank" rel="noopener">{{ row.hostname }}</a>
+          {% if row.path %}<span class="mono" style="color:var(--muted)">{{ row.path }}</span>{% endif %}
+        </td>
+        <td class="mono">{{ row.service or '—' }}</td>
+        <td>{{ row.app_name or '—' }}</td>
+        <td>
+          {% if row.policies %}
+            <div class="badges">
+            {% for p in row.policies %}<span class="badge">{{ p.name }}</span>{% endfor %}
+            </div>
+          {% else %}<span class="badge warn">geen policy</span>{% endif %}
+        </td>
+        <td>
+          <div class="badges">
+            <span class="badge {{ 'ok' if row.has_route else 'off' }}">route</span>
+            <span class="badge {{ 'ok' if row.has_app else 'off' }}">access</span>
+            <span class="badge {{ 'ok' if row.dns_ok else 'off' }}">dns</span>
+          </div>
+        </td>
+        <td class="actions">
+          <a class="btn small" href="/edit?h={{ row.hostname }}&p={{ row.path }}">Bewerken</a>
+          <a class="btn small danger" href="/delete?h={{ row.hostname }}&p={{ row.path }}">Verwijderen</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">Nog niets gevonden. <a href="/new">Voeg je eerste applicatie toe →</a></div>
+  {% endif %}
+</div>
+{% endblock %}

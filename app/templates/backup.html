@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% set active_page = 'backup' %}
+{% block content %}
+<h1>Backup &amp; restore</h1>
+<p class="sub">Exporteer de tunnelconfiguratie, Access-apps en policies als JSON — en zet ze weer terug.</p>
+
+<div class="panel">
+  <div class="panel-head">Exporteren</div>
+  <div class="panel-body">
+    <p class="hint" style="margin-top:0">Downloadt alle ingress-regels van de tunnel, alle Access-applicaties en de herbruikbare policies.</p>
+    <a class="btn primary" href="/backup/export">Backup downloaden</a>
+  </div>
+</div>
+
+{% if preview %}
+<div class="panel">
+  <div class="panel-head">Controleer voor je terugzet</div>
+  <div class="panel-body">
+    <dl class="kv">
+      <dt>Backup van</dt><dd>{{ preview.tunnel_name }} · {{ preview.exported_at }}</dd>
+      <dt>Routes in backup</dt><dd>{{ preview.routes_total }}</dd>
+      <dt>Komen erbij</dt>
+      <dd>{% if preview.routes_new %}<div class="badges">{% for h in preview.routes_new %}<span class="badge ok">{{ h }}</span>{% endfor %}</div>{% else %}geen{% endif %}</dd>
+      <dt>Verdwijnen</dt>
+      <dd>{% if preview.routes_removed %}<div class="badges">{% for h in preview.routes_removed %}<span class="badge warn">{{ h }}</span>{% endfor %}</div>{% else %}geen{% endif %}</dd>
+      <dt>Ontbrekende Access-apps</dt>
+      <dd>{% if preview.missing_apps %}<div class="badges">{% for a in preview.missing_apps %}<span class="badge">{{ a.name }}</span>{% endfor %}</div>{% else %}geen{% endif %}</dd>
+    </dl>
+
+    <form method="post" action="/backup/apply" style="margin-top:20px">
+      <input type="hidden" name="token" value="{{ preview.token }}">
+      <div class="check">
+        <input type="checkbox" id="restore_routes" name="restore_routes" value="1" checked>
+        <label for="restore_routes">Tunnel-routes terugzetten <span class="hint">(vervangt de hele ingress-lijst)</span></label>
+      </div>
+      <div class="check">
+        <input type="checkbox" id="restore_apps" name="restore_apps" value="1">
+        <label for="restore_apps">Ontbrekende Access-apps opnieuw aanmaken <span class="hint">(bestaande apps blijven ongemoeid)</span></label>
+      </div>
+      <div class="form-actions">
+        <button class="btn danger" type="submit">Restore uitvoeren</button>
+        <a class="btn" href="/backup">Annuleren</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% else %}
+<div class="panel">
+  <div class="panel-head">Terugzetten</div>
+  <div class="panel-body">
+    <form method="post" action="/backup/preview" enctype="multipart/form-data">
+      <div class="field">
+        <label for="backup">Backup-bestand (.json)</label>
+        <input type="file" id="backup" name="backup" accept="application/json,.json" required>
+      </div>
+      <button class="btn" type="submit">Inlezen en vergelijken</button>
+      <div class="hint">Je krijgt eerst een overzicht van wat er zou veranderen; er wordt nog niets aangepast.</div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

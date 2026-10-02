@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% set show_nav = false %}
+{% block content %}
+<div class="center-wrap">
+  <div class="panel">
+    <div class="panel-head"><span class="brand"><span class="dot"></span> CFZeroTrustControl</span></div>
+    <div class="panel-body">
+      <form method="post" action="/login">
+        <div class="field">
+          <label for="password">Wachtwoord</label>
+          <input type="password" id="password" name="password" autofocus autocomplete="current-password">
+        </div>
+        <button class="btn primary" type="submit" style="width:100%">Inloggen</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

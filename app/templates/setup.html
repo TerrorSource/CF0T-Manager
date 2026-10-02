@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% set active_page = 'setup' %}
+{% block content %}
+<h1>Instellingen</h1>
+<p class="sub">Token en account komen uit je <span class="mono">.env</span>. De tunnelkeuze wordt bewaard in <span class="mono">/data/state.json</span>.</p>
+
+{% if cf_error %}<div class="flash err">Cloudflare: {{ cf_error }}</div>{% endif %}
+
+<div class="panel">
+  <div class="panel-head">Verbinding</div>
+  <div class="panel-body">
+    <dl class="kv">
+      <dt>API-token</dt>
+      <dd>{% if settings.api_token %}<span class="badge ok">ingesteld</span>
+          {% if token_info %} <span class="badge ok">status: {{ token_info.status }}</span>{% endif %}
+          {% else %}<span class="badge warn">ontbreekt</span>{% endif %}</dd>
+      <dt>Account ID</dt>
+      <dd class="mono">{{ settings.account_id or '—' }}</dd>
+      <dt>Login op deze tool</dt>
+      <dd>{% if settings.auth_enabled %}<span class="badge ok">aan</span>{% else %}<span class="badge warn">uit — zet CFZT_PASSWORD in .env</span>{% endif %}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">Tunnel</div>
+  <div class="panel-body">
+    {% if settings.env_tunnel_id %}
+      <p class="hint">Vastgezet via <span class="mono">CF_TUNNEL_ID</span> in .env: <span class="mono">{{ settings.env_tunnel_id }}</span></p>
+    {% elif tunnels %}
+      <form method="post" action="/setup">
+        <div class="field">
+          <label for="tunnel_id">Welke tunnel wil je beheren?</label>
+          <select id="tunnel_id" name="tunnel_id">
+            {% for t in tunnels %}
+            <option value="{{ t.id }}" {% if t.id == tunnel_id %}selected{% endif %}>
+              {{ t.name }} — {{ t.status }} ({{ t.id[:8] }}…)
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <button class="btn primary" type="submit">Opslaan</button>
+      </form>
+    {% else %}
+      <p class="hint">Geen tunnels gevonden (of het token mist de permissie <span class="mono">Cloudflare Tunnel: Edit</span>).</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">Benodigde token-permissies</div>
+  <div class="panel-body">
+    <ul class="plain">
+      <li>Account → Cloudflare Tunnel → <strong>Edit</strong></li>
+      <li>Account → Access: Apps and Policies → <strong>Edit</strong></li>
+      <li>Zone → DNS → <strong>Edit</strong> (optioneel, voor DNS-records)</li>
+      <li>Zone → Zone → <strong>Read</strong> (optioneel, voor de domein-dropdown)</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}
