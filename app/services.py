@@ -277,7 +277,6 @@ class ZeroTrustManager:
             "name": hostname,
             "content": target,
             "proxied": True,
-            "comment": "Managed by CFZeroTrustControl",
         })
         return "DNS CNAME created."
 

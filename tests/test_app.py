@@ -170,8 +170,9 @@ def test_create_full_app():
     app = [a for a in STATE["apps"] if a["domain"] == "jellyfin.makooy.nl"][0]
     assert app["type"] == "self_hosted"
     assert [p["id"] for p in app["policies"]] == ["pol1", "pol2"], "both policies attached"
-    assert any(d["name"] == "jellyfin.makooy.nl" and d["content"].endswith("cfargotunnel.com")
-               for d in STATE["dns"])
+    record = [d for d in STATE["dns"] if d["name"] == "jellyfin.makooy.nl"][0]
+    assert record["content"].endswith("cfargotunnel.com")
+    assert "comment" not in record, "do not write anything of our own into the user's DNS record"
 
 
 def test_edit_changes_service_and_policies():
