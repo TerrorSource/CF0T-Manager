@@ -349,8 +349,12 @@ async def edit_form(request: Request):
 
     origin = (row.rule or {}).get("originRequest") or {}
     parsed = services.parse_service_url(row.service)
+    # Show the subdomain on its own when the domain dropdown already carries
+    # the zone, so the two fields do not repeat each other.
+    subdomain, zone_name = services.split_hostname(row.hostname, zones)
     form: dict[str, Any] = {
-        "hostname": row.hostname,
+        "hostname": subdomain,
+        "zone": zone_name,
         "path": row.path,
         "app_name": row.app_name or row.hostname.split(".")[0],
         "session_duration": (row.app or {}).get("session_duration") or "24h",

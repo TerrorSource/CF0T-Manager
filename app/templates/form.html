@@ -25,7 +25,7 @@
       <select id="zone" name="zone">
         <option value="">— full hostname entered above —</option>
         {% for z in zones %}
-        <option value="{{ z.name }}" {% if (f.hostname and f.hostname.endswith(z.name)) or (mode == 'new' and zones|length == 1) %}selected{% endif %}>{{ z.name }}</option>
+        <option value="{{ z.name }}" {% if z.name == f.zone|default('') or (mode == 'new' and zones|length == 1) %}selected{% endif %}>{{ z.name }}</option>
         {% endfor %}
       </select>
     </div>

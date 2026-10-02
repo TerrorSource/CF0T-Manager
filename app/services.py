@@ -135,6 +135,21 @@ def parse_service_url(service: str) -> dict:
     return out
 
 
+def split_hostname(hostname: str, zones: list[dict]) -> tuple[str, str]:
+    """'app.example.com' + the example.com zone -> ('app', 'example.com').
+
+    Returns the hostname unchanged with an empty zone when no zone matches, or
+    when the hostname *is* the zone, since there is no subdomain to split off.
+    """
+    zone = zone_for_hostname(hostname, zones)
+    if not zone:
+        return hostname, ""
+    name = zone["name"]
+    if hostname.lower() == name.lower():
+        return hostname, ""
+    return hostname[: -(len(name) + 1)], name
+
+
 def zone_for_hostname(hostname: str, zones: list[dict]) -> dict | None:
     hostname = (hostname or "").lower()
     best = None

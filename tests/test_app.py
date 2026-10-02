@@ -192,6 +192,25 @@ def test_create_full_app():
     assert "comment" not in record, "do not write anything of our own into the user's DNS record"
 
 
+def test_edit_form_splits_the_hostname_from_the_domain():
+    """The hostname field and the domain dropdown must not repeat the zone."""
+    reset_state()
+    login()
+    page = tc.get("/edit?h=sonarr.makooy.nl&p=").text
+    assert 'name="hostname" value="sonarr"' in page, "only the subdomain belongs in the field"
+    assert 'value="makooy.nl" selected' in page, "the zone belongs in the dropdown"
+    assert 'value="sonarr.makooy.nl"' not in page.split('name="original_hostname"')[0]
+
+
+def test_hostname_splitting():
+    zones = [{"id": "z", "name": "makooy.nl"}]
+    assert services.split_hostname("sonarr.makooy.nl", zones) == ("sonarr", "makooy.nl")
+    assert services.split_hostname("a.b.makooy.nl", zones) == ("a.b", "makooy.nl")
+    assert services.split_hostname("makooy.nl", zones) == ("makooy.nl", ""), "apex has no subdomain"
+    assert services.split_hostname("host.example.org", zones) == ("host.example.org", "")
+    assert services.split_hostname("host.example.org", []) == ("host.example.org", "")
+
+
 def test_edit_changes_service_and_policies():
     reset_state()
     login()
