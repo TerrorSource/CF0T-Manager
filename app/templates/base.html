@@ -15,7 +15,7 @@
     <a href="/" class="{{ 'active' if active_page == 'index' }}">Applications</a>
     <a href="/new" class="{{ 'active' if active_page == 'new' }}">New application</a>
     <a href="/backup" class="{{ 'active' if active_page == 'backup' }}">Backup</a>
-    <a href="/setup" class="{{ 'active' if active_page == 'setup' }}">Settings</a>
+    <a href="/settings" class="{{ 'active' if active_page == 'settings' }}">Settings</a>
   </nav>
   <span class="spacer"></span>
   {% if tunnel_id %}<span class="tunnel-chip mono">tunnel {{ tunnel_id[:8] }}…</span>{% endif %}

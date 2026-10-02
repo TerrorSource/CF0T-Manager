@@ -20,17 +20,19 @@ from .config import active_tunnel_id, set_active_tunnel_id, settings
 from .services import ZeroTrustManager
 
 BASE_DIR = Path(__file__).resolve().parent
-PUBLIC_PATHS = {"/login", "/healthz", "/favicon.ico"}
+OPEN_PATHS = {"/healthz", "/favicon.ico"}
 
 _client: CloudflareClient | None = None
+_client_key: tuple[str, str] | None = None
+_stale_clients: list[CloudflareClient] = []
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    global _client
-    if _client is not None:
-        await _client.aclose()
+    for stale in [*_stale_clients, _client]:
+        if stale is not None:
+            await stale.aclose()
 
 
 app = FastAPI(title="CFZeroTrustControl", lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -39,10 +41,36 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
 def client() -> CloudflareClient:
-    global _client
-    if _client is None:
-        _client = CloudflareClient(settings.api_token, settings.account_id)
+    """Rebuilt automatically when the token or account changes."""
+    global _client, _client_key
+    key = (settings.api_token, settings.account_id)
+    if _client is None or _client_key != key:
+        if _client is not None:
+            _stale_clients.append(_client)
+        _client = CloudflareClient(*key)
+        _client_key = key
     return _client
+
+
+def reset_client() -> None:
+    global _client, _client_key
+    if _client is not None:
+        _stale_clients.append(_client)
+    _client = None
+    _client_key = None
+
+
+async def probe_credentials(token: str, account_id: str) -> tuple[str, list[dict]]:
+    """Check a token/account pair without touching the cached client.
+    Returns (error message, tunnels)."""
+    probe = CloudflareClient(token, account_id)
+    try:
+        await probe.verify_token()
+        return "", await probe.list_tunnels()
+    except CloudflareError as exc:
+        return str(exc), []
+    finally:
+        await probe.aclose()
 
 
 def manager() -> ZeroTrustManager:
@@ -66,14 +94,23 @@ def render(request: Request, template: str, **ctx) -> HTMLResponse:
 @app.middleware("http")
 async def guard(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/static") or path in PUBLIC_PATHS:
+    if path.startswith("/static") or path in OPEN_PATHS:
+        return await call_next(request)
+
+    # Nothing configured yet: everything goes to the first-run wizard.
+    if settings.needs_setup:
+        if path == "/welcome":
+            return await call_next(request)
+        return RedirectResponse("/welcome", status_code=303)
+    if path == "/welcome":
+        return RedirectResponse("/", status_code=303)
+
+    if path == "/login":
         return await call_next(request)
     if not auth.is_logged_in(request):
         return RedirectResponse("/login", status_code=303)
-    if not settings.configured and path != "/setup":
-        return redirect("/setup", err="Set CF_API_TOKEN and CF_ACCOUNT_ID in your .env first.")
-    if not active_tunnel_id() and path not in {"/setup", "/logout"}:
-        return redirect("/setup", err="Pick a tunnel first.")
+    if not active_tunnel_id() and not path.startswith("/settings") and path != "/logout":
+        return redirect("/settings", err="Pick a tunnel first.")
     return await call_next(request)
 
 
@@ -107,30 +144,124 @@ async def logout():
     return response
 
 
-# ----------------------------------------------------------------- setup ---
-@app.get("/setup", response_class=HTMLResponse)
-async def setup(request: Request):
+# --------------------------------------------------- first-run wizard ---
+@app.get("/welcome", response_class=HTMLResponse)
+async def welcome_form(request: Request):
+    return render(request, "welcome.html",
+                  need_password=not (settings.auth_enabled or settings.login_disabled),
+                  need_cloudflare=not settings.configured, form={})
+
+
+@app.post("/welcome")
+async def welcome_submit(request: Request):
+    form = await request.form()
+    need_password = not (settings.auth_enabled or settings.login_disabled)
+    need_cloudflare = not settings.configured
+
+    api_token = (form.get("api_token") or "").strip() or settings.api_token
+    account_id = (form.get("account_id") or "").strip() or settings.account_id
+    kept = {"api_token": "", "account_id": account_id}
+
+    if need_password:
+        problem = auth.password_problem(form.get("password") or "", form.get("password_confirm") or "")
+        if problem:
+            return render(request, "welcome.html", need_password=True,
+                          need_cloudflare=need_cloudflare, form=kept, err_msg=problem)
+
+    if need_cloudflare and not (api_token and account_id):
+        return render(request, "welcome.html", need_password=need_password, need_cloudflare=True,
+                      form=kept, err_msg="Both the API token and the account ID are required.")
+
+    error, tunnels = await probe_credentials(api_token, account_id)
+    if error:
+        return render(request, "welcome.html", need_password=need_password,
+                      need_cloudflare=need_cloudflare, form=kept,
+                      err_msg=f"Cloudflare rejected these credentials: {error}")
+
+    settings.save(api_token=api_token, account_id=account_id)
+    if need_password:
+        settings.set_password_hash(auth.hash_password(form.get("password")))
+    if len(tunnels) == 1:
+        set_active_tunnel_id(tunnels[0]["id"])
+    reset_client()
+
+    response = RedirectResponse("/", status_code=303)
+    auth.set_session_cookie(response, auth.make_token())
+    return response
+
+
+# -------------------------------------------------------------- settings ---
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
     tunnels: list[dict] = []
     token_info: dict | None = None
     error = ""
-    if settings.configured:
-        try:
-            token_info = await client().verify_token()
-            tunnels = await client().list_tunnels()
-            if not active_tunnel_id() and len(tunnels) == 1:
-                set_active_tunnel_id(tunnels[0]["id"])
-                return redirect("/", ok=f"Selected tunnel '{tunnels[0]['name']}'.")
-        except CloudflareError as exc:
-            error = str(exc)
-    return render(request, "setup.html", tunnels=tunnels, token_info=token_info, cf_error=error)
+    try:
+        token_info = await client().verify_token()
+        tunnels = await client().list_tunnels()
+        if not active_tunnel_id() and len(tunnels) == 1:
+            set_active_tunnel_id(tunnels[0]["id"])
+            return redirect("/", ok=f"Selected tunnel '{tunnels[0]['name']}'.")
+    except CloudflareError as exc:
+        error = str(exc)
+    return render(request, "settings.html", tunnels=tunnels, token_info=token_info,
+                  cf_error=error, source=settings.source)
 
 
-@app.post("/setup")
-async def setup_save(request: Request, tunnel_id: str = Form("")):
+@app.post("/settings/cloudflare")
+async def settings_cloudflare(request: Request, api_token: str = Form(""),
+                              account_id: str = Form("")):
+    api_token = api_token.strip() or settings.api_token
+    account_id = account_id.strip() or settings.account_id
+    if not (api_token and account_id):
+        return redirect("/settings", err="Both the API token and the account ID are required.")
+    error, tunnels = await probe_credentials(api_token, account_id)
+    if error:
+        return redirect("/settings", err=f"Cloudflare rejected these credentials: {error}")
+
+    changed_account = account_id != settings.account_id
+    settings.save(api_token=api_token, account_id=account_id)
+    if changed_account or not any(t["id"] == active_tunnel_id() for t in tunnels):
+        settings.save(tunnel_id=tunnels[0]["id"] if len(tunnels) == 1 else "")
+    reset_client()
+    return redirect("/settings", ok="Cloudflare credentials saved.")
+
+
+@app.post("/settings/tunnel")
+async def settings_tunnel(request: Request, tunnel_id: str = Form("")):
     if not tunnel_id:
-        return redirect("/setup", err="No tunnel selected.")
+        return redirect("/settings", err="No tunnel selected.")
     set_active_tunnel_id(tunnel_id)
     return redirect("/", ok="Tunnel saved.")
+
+
+@app.post("/settings/password")
+async def settings_password(request: Request, current_password: str = Form(""),
+                            password: str = Form(""), password_confirm: str = Form("")):
+    if settings.env_password:
+        return redirect("/settings", err="The password is set through CFZT_PASSWORD; change it there.")
+    if settings.auth_enabled and not auth.check_password(current_password):
+        return redirect("/settings", err="The current password is not correct.")
+    problem = auth.password_problem(password, password_confirm)
+    if problem:
+        return redirect("/settings", err=problem)
+
+    settings.set_password_hash(auth.hash_password(password))
+    response = redirect("/settings", ok="Password changed. Other sessions have been signed out.")
+    auth.set_session_cookie(response, auth.make_token())
+    return response
+
+
+@app.post("/settings/preferences")
+async def settings_preferences(request: Request, session_hours: str = Form("12"),
+                               secure_cookie: str = Form(""), default_origin_host: str = Form("")):
+    try:
+        hours = max(1, min(int(session_hours), 24 * 365))
+    except ValueError:
+        return redirect("/settings", err="Session duration must be a number of hours.")
+    settings.save(session_hours=hours, secure_cookie=bool(secure_cookie),
+                  default_origin_host=default_origin_host.strip() or "192.168.1.9")
+    return redirect("/settings", ok="Preferences saved.")
 
 
 # ------------------------------------------------------------- dashboard ---

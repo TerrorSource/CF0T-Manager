@@ -127,3 +127,6 @@ ul.plain { margin: 8px 0; padding-left: 20px; color: var(--muted); font-size: 14
   td { border: none; padding: 6px 14px; }
   td.actions { text-align: left; }
 }
+
+.setup-wrap { max-width: 640px; margin: 6vh auto; }
+.setup-wrap .panel-body > .sub { font-size: 14px; }

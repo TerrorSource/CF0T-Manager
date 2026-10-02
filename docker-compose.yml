@@ -2,6 +2,9 @@
 # Portainer stack of type "Repository".
 # Want Portainer to pull the prebuilt GHCR image instead of building on your
 # NAS? Use docker-compose.ghcr.yml instead.
+#
+# No variables are required: start the container and finish the setup in the
+# web UI. Anything you do set here wins over what the UI stores.
 
 services:
   cfzerotrustcontrol:
@@ -12,14 +15,11 @@ services:
     ports:
       - "${CFZT_PORT:-8099}:8080"
     environment:
-      CF_API_TOKEN: ${CF_API_TOKEN:?CF_API_TOKEN is missing - set it in .env or in the Portainer stack variables}
-      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is missing - set it in .env or in the Portainer stack variables}
+      CF_API_TOKEN: ${CF_API_TOKEN:-}
+      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
       CF_TUNNEL_ID: ${CF_TUNNEL_ID:-}
       CFZT_PASSWORD: ${CFZT_PASSWORD:-}
       CFZT_SECRET_KEY: ${CFZT_SECRET_KEY:-}
-      CFZT_SESSION_HOURS: ${CFZT_SESSION_HOURS:-12}
-      CFZT_SECURE_COOKIE: ${CFZT_SECURE_COOKIE:-0}
-      CFZT_DEFAULT_ORIGIN_HOST: ${CFZT_DEFAULT_ORIGIN_HOST:-192.168.1.9}
     volumes:
       - cfzt-data:/data
 

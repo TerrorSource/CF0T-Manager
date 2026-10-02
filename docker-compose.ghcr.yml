@@ -2,12 +2,9 @@
 # Meant to be pasted into Portainer (Stacks > Add stack > Web editor):
 # nothing is built on your NAS, the image is only pulled.
 #
-# Under "Environment variables" in Portainer, set at least:
-#   CFZT_IMAGE      ghcr.io/<your-github-name>/<repo-name>:latest
-#   CF_API_TOKEN    <your Cloudflare API token>
-#   CF_ACCOUNT_ID   <your Cloudflare account ID>
-#   CFZT_PASSWORD   <password for the web UI>
-#   CFZT_SECRET_KEY <openssl rand -hex 32>
+# Set CFZT_IMAGE under "Environment variables" and deploy. Everything else —
+# Cloudflare token, account ID, password — is configured in the web UI the
+# first time you open it.
 
 services:
   cfzerotrustcontrol:
@@ -18,14 +15,12 @@ services:
     ports:
       - "${CFZT_PORT:-8099}:8080"
     environment:
-      CF_API_TOKEN: ${CF_API_TOKEN:?CF_API_TOKEN is missing}
-      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is missing}
+      # All optional: leave them empty and use the web UI instead.
+      CF_API_TOKEN: ${CF_API_TOKEN:-}
+      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
       CF_TUNNEL_ID: ${CF_TUNNEL_ID:-}
       CFZT_PASSWORD: ${CFZT_PASSWORD:-}
       CFZT_SECRET_KEY: ${CFZT_SECRET_KEY:-}
-      CFZT_SESSION_HOURS: ${CFZT_SESSION_HOURS:-12}
-      CFZT_SECURE_COOKIE: ${CFZT_SECURE_COOKIE:-0}
-      CFZT_DEFAULT_ORIGIN_HOST: ${CFZT_DEFAULT_ORIGIN_HOST:-192.168.1.9}
     volumes:
       - cfzt-data:/data
 

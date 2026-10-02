@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% set show_nav = false %}
+{% block content %}
+<div class="setup-wrap">
+  <div class="panel">
+    <div class="panel-head"><span class="brand"><span class="dot"></span> Welcome to CFZeroTrustControl</span></div>
+    <div class="panel-body">
+      <p class="sub" style="margin-top:0">Two minutes of setup and you're done. Everything you enter
+        here is stored in the container's <span class="mono">/data</span> volume — you can change it
+        later under Settings.</p>
+
+      <form method="post" action="/welcome">
+        {% if need_password %}
+        <fieldset>
+          <legend>1. Pick a password</legend>
+          <p class="hint" style="margin-top:0">This is what you'll log in with. Minimum 8 characters.</p>
+          <div class="grid c2">
+            <div class="field">
+              <label for="password">Password</label>
+              <input type="password" id="password" name="password" autocomplete="new-password" required>
+            </div>
+            <div class="field">
+              <label for="password_confirm">Repeat password</label>
+              <input type="password" id="password_confirm" name="password_confirm" autocomplete="new-password" required>
+            </div>
+          </div>
+        </fieldset>
+        {% endif %}
+
+        {% if need_cloudflare %}
+        <fieldset>
+          <legend>{{ '2.' if need_password else '1.' }} Connect to Cloudflare</legend>
+          <div class="field">
+            <label for="api_token">API token</label>
+            <input type="password" id="api_token" name="api_token" autocomplete="off"
+                   placeholder="40-character token" required>
+            <div class="hint">
+              Create it at <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener">dash.cloudflare.com/profile/api-tokens</a>
+              → Create Token → Create Custom Token, with these permissions:
+            </div>
+            <ul class="plain">
+              <li>Account → Cloudflare Tunnel → <strong>Edit</strong></li>
+              <li>Account → Access: Apps and Policies → <strong>Edit</strong></li>
+              <li>Zone → DNS → <strong>Edit</strong> <span class="hint">(optional, for DNS records)</span></li>
+              <li>Zone → Zone → <strong>Read</strong> <span class="hint">(optional, for the domain dropdown)</span></li>
+            </ul>
+          </div>
+          <div class="field">
+            <label for="account_id">Account ID</label>
+            <input type="text" id="account_id" name="account_id" class="mono"
+                   value="{{ form.account_id|default('') }}" placeholder="32 hex characters" required>
+            <div class="hint">Right-hand column of your Cloudflare dashboard, or the first path
+              segment of the Zero Trust URL.</div>
+          </div>
+        </fieldset>
+        {% endif %}
+
+        <div class="form-actions">
+          <button class="btn primary" type="submit">Check and continue</button>
+        </div>
+        <div class="hint" style="margin-top:12px">Your credentials are verified against Cloudflare
+          before anything is saved.</div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
