@@ -1,177 +1,133 @@
 # CFZeroTrustControl
 
-Kleine Docker-container met een web-UI om je Cloudflare Zero Trust omgeving te beheren.
-Eén formulier zet in één keer de **tunnel-route**, de **Access-applicatie** en de **policy** goed —
-in plaats van drie losse schermen in het Cloudflare-dashboard.
+A small web UI to manage Cloudflare Zero Trust. Adding an app normally means three separate
+screens in the Cloudflare dashboard — tunnel route, Access application, policy. Here it's one form.
 
-## Wat kun je ermee
+- **Overview** — every tunnel hostname with its origin, Access app, policies and DNS status
+- **Add** — creates the tunnel route, the Access application and attaches your policies in one go
+- **Edit / delete** — change the origin or policies; delete route, app and DNS record selectively
+- **Backup** — export everything as JSON, restore with a diff screen first
+- **Login** — one password, signed session cookie
 
-| | |
-|---|---|
-| **Overzicht** | Alle hostnames van de tunnel naast hun Access-app, policies en DNS-status. Eén tabel, zoekbaar. |
-| **Toevoegen** | Hostname + origin (bv. `http://192.168.1.9:8096`) → tunnel-route, Access-app en gekozen policy(s) in één flow. Optioneel meteen het DNS CNAME. |
-| **Bewerken** | Origin, pad, origin-opties, app-naam, sessieduur en policies aanpassen. Access-app aan/uit zetten. |
-| **Verwijderen** | Per onderdeel aanvinken: route, Access-app en/of DNS-record. |
-| **Backup** | Alles als JSON exporteren; terugzetten gaat via een vergelijkingsscherm, dus je ziet eerst wat er verandert. |
-| **Login** | Eén wachtwoord, ondertekende sessiecookie. |
+---
 
-## 1. API-token maken
+## Setup
 
-Cloudflare dashboard → **My Profile → API Tokens → Create Token → Create Custom Token**:
+### Step 1 — Create a Cloudflare API token
 
-| Scope | Permissie | Niveau |
+Dashboard → **My Profile → API Tokens → Create Token → Create Custom Token**
+
+| Scope | Permission | Level |
 |---|---|---|
 | Account | Cloudflare Tunnel | Edit |
 | Account | Access: Apps and Policies | Edit |
-| Zone | DNS | Edit *(optioneel — voor DNS-records)* |
-| Zone | Zone | Read *(optioneel — voor de domein-dropdown)* |
+| Zone | DNS | Edit *(optional, for DNS records)* |
+| Zone | Zone | Read *(optional, for the domain dropdown)* |
 
-Zonder de twee Zone-permissies werkt alles behalve de DNS-kolom en de DNS-checkbox.
-Je **Account ID** staat in het Cloudflare-dashboard in de rechterkolom (of in de URL van Zero Trust).
+Copy the token immediately — it is shown only once.
 
-### Passkey op je account?
+You also need your **Account ID**: it's in the right-hand column of the Cloudflare dashboard.
 
-Dat is geen probleem. Een passkey beveiligt het **inloggen op het dashboard**; een API-token is
-een losse sleutel met z'n eigen permissies. De token-header `Authorization: Bearer …` gaat niet
-door 2FA of passkey-verificatie heen — dat zou API's ook onbruikbaar maken. In de praktijk:
+> **Using a passkey on your account?** No problem. A passkey protects dashboard login; an API
+> token is a separate key and is not subject to 2FA. Cloudflare may ask for your passkey once
+> while creating the token.
 
-- Je logt met je passkey in op het dashboard en maakt daar het token aan. Cloudflare kan je
-  tijdens dat aanmaken nog één keer om je passkey vragen; daarna krijg je het token te zien.
-- **Kopieer het token meteen** — het wordt daarna nooit meer getoond.
-- Gebruik een **API-token**, niet de Global API Key. Een token is beperkt tot de permissies
-  hierboven en kun je los intrekken zonder je accountwachtwoord te wijzigen.
-
-## 2. Lokaal draaien
+### Step 2 — Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Vul minimaal `CF_API_TOKEN`, `CF_ACCOUNT_ID` en `CFZT_PASSWORD` in. Een sessie-sleutel genereer je met
-`openssl rand -hex 32` (laat je `CFZT_SECRET_KEY` leeg, dan maakt de container er zelf één aan).
+Fill in `CF_API_TOKEN`, `CF_ACCOUNT_ID` and `CFZT_PASSWORD`. Everything else has sane defaults.
+
+### Step 3 — Start
 
 ```bash
 docker compose up -d --build
 ```
 
-Open daarna http://localhost:8099. Heb je meerdere tunnels, dan kies je bij **Instellingen**
-welke je wilt beheren (of zet `CF_TUNNEL_ID` vast in `.env`).
+### Step 4 — Open it
 
-## 3. Op GitHub zetten
+Go to **http://localhost:8099** and log in. If you have more than one tunnel, pick the one you
+want to manage under **Instellingen** (Settings); with a single tunnel it's selected automatically.
+
+That's it. **Nieuwe applicatie** (New application) now creates a route, an Access app and its policies in one submit.
+
+---
+
+## Running it on a NAS with Portainer
+
+First push this repo to GitHub. The included workflow builds a multi-arch image (amd64 + arm64)
+and publishes it to `ghcr.io/<you>/<repo>` on every push to `main`.
 
 ```bash
-git remote add origin git@github.com:<jouw-naam>/<repo-naam>.git
+git remote add origin git@github.com:<you>/<repo>.git
 git push -u origin main
 ```
 
-`.env` staat in `.gitignore`, dus je token gaat niet mee. In de repo zitten twee workflows:
+Then in Portainer, **Stacks → Add stack → Web editor**, paste
+[`docker-compose.ghcr.yml`](docker-compose.ghcr.yml), and set these under *Environment variables*:
 
-- **Tests** — draait de pytest-suite bij elke push en pull request.
-- **Build and publish image** — bouwt bij elke push naar `main` een multi-arch image
-  (amd64 + arm64) en publiceert die naar `ghcr.io/<jouw-naam>/<repo-naam>:latest`.
-
-Na de eerste build staat de image onder **Packages** bij je repo. Standaard is die privé;
-wil je hem publiek, zet dat dan om via Package settings → Change visibility. Je NAS moet
-anders eerst `docker login ghcr.io` doen met een personal access token (scope `read:packages`).
-
-## 4. Draaien in Portainer op je NAS
-
-Twee smaken — kies er één.
-
-### A. Stack vanuit de Git-repo (bouwt op de NAS)
-
-**Stacks → Add stack → Repository**
-
-| Veld | Waarde |
+| Variable | Value |
 |---|---|
-| Repository URL | `https://github.com/<jouw-naam>/<repo-naam>` |
-| Compose path | `docker-compose.yml` |
+| `CFZT_IMAGE` | `ghcr.io/<you>/<repo>:latest` |
+| `CF_API_TOKEN` | your Cloudflare API token |
+| `CF_ACCOUNT_ID` | your Cloudflare account ID |
+| `CFZT_PASSWORD` | password for the web UI |
 
-Vul onder **Environment variables** in: `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `CFZT_PASSWORD`,
-`CFZT_SECRET_KEY` en eventueel `CF_TUNNEL_ID` en `CFZT_PORT`. Daarna **Deploy the stack**.
+Deploy. Nothing is built on the NAS — the image is just pulled.
 
-Zet je "Automatic updates" aan, dan haalt Portainer nieuwe commits automatisch op.
+> GHCR packages are **private** by default. Either make the package public under
+> *Package settings → Change visibility*, or run `docker login ghcr.io` on the NAS with a
+> personal access token that has the `read:packages` scope.
 
-### B. Kant-en-klare image van GHCR (bouwt niets)
+**Prefer to build on the NAS instead?** Use **Add stack → Repository** with your repo URL and
+`docker-compose.yml` as the compose path, and set the same variables.
 
-Sneller, en prettiger voor een NAS met weinig CPU. **Stacks → Add stack → Web editor**,
-plak de inhoud van [`docker-compose.ghcr.yml`](docker-compose.ghcr.yml), en zet onder
-**Environment variables** in elk geval:
+---
 
-| Variabele | Waarde |
-|---|---|
-| `CFZT_IMAGE` | `ghcr.io/<jouw-naam>/<repo-naam>:latest` |
-| `CF_API_TOKEN` | je Cloudflare API-token |
-| `CF_ACCOUNT_ID` | je Cloudflare account-ID |
-| `CFZT_PASSWORD` | wachtwoord voor de web-UI |
-| `CFZT_SECRET_KEY` | uitvoer van `openssl rand -hex 32` |
+## Configuration
 
-De stack gebruikt een named volume `cfzt-data` voor `/data`, zodat je geen gedoe hebt met
-rechten op een bind-mount. Portainer toont de health-status van de container zodra hij draait.
-
-### De tool zelf achter Zero Trust zetten
-
-Leuke eerste test: voeg de tool met zichzelf toe.
-
-1. **Nieuwe applicatie** → hostname `cfzt`, domein `makooy.nl`
-2. Origin: `http` · host = IP van je NAS · poort `8099`
-3. Access-applicatie aan, policy `GoogleIDP-Marc-Policy`
-4. Opslaan
-
-Daarna is `https://cfzt.makooy.nl` bereikbaar achter je eigen IdP. Zet in dat geval
-`CFZT_SECURE_COOKIE=1`.
-
-## Environment variables
-
-| Variabele | Verplicht | Uitleg |
+| Variable | Required | Description |
 |---|---|---|
-| `CF_API_TOKEN` | ja | Cloudflare API-token (zie hierboven) |
-| `CF_ACCOUNT_ID` | ja | Cloudflare account-ID |
-| `CF_TUNNEL_ID` | nee | Vastzetten op één tunnel; leeg = kiezen in de UI |
-| `CFZT_PASSWORD` | aanbevolen | Wachtwoord voor de web-UI; leeg = geen login |
-| `CFZT_SECRET_KEY` | nee | Sleutel voor sessiecookies; leeg = automatisch gegenereerd in `/data/secret.key` |
-| `CFZT_SESSION_HOURS` | nee | Hoe lang je ingelogd blijft (standaard 12) |
-| `CFZT_SECURE_COOKIE` | nee | `1` als de tool alleen via https bereikbaar is |
-| `CFZT_DEFAULT_ORIGIN_HOST` | nee | Voorinvulling van het Host/IP-veld |
-| `CFZT_PORT` | nee | Poort op de host (standaard 8099) |
-| `CFZT_IMAGE` | alleen bij GHCR | Welke image gepulld wordt |
+| `CF_API_TOKEN` | yes | Cloudflare API token |
+| `CF_ACCOUNT_ID` | yes | Cloudflare account ID |
+| `CFZT_PASSWORD` | recommended | Web UI password; empty means no login |
+| `CF_TUNNEL_ID` | no | Pin to one tunnel; empty means choose in the UI |
+| `CFZT_SECRET_KEY` | no | Session cookie key; generated in `/data/secret.key` if empty |
+| `CFZT_SESSION_HOURS` | no | How long you stay logged in (default 12) |
+| `CFZT_SECURE_COOKIE` | no | Set to `1` when reaching the tool over https only |
+| `CFZT_DEFAULT_ORIGIN_HOST` | no | Prefills the Host/IP field in the form |
+| `CFZT_PORT` | no | Host port (default 8099) |
+| `CFZT_IMAGE` | GHCR only | Which image to pull |
 
-## Hoe het onder water werkt
+---
 
-- **Tunnel-routes**: de Cloudflare API vervangt bij een wijziging de *hele* ingress-lijst.
-  De tool leest daarom altijd eerst de actuele config, past één regel aan en houdt de
-  catch-all (`http_status:404`) gegarandeerd als laatste regel. Bestaat die niet, dan wordt
-  hij toegevoegd.
-- **Access-apps** worden gekoppeld via *reusable policies*: dezelfde policies die je in
-  Zero Trust → Access controls → Policies hebt staan, met precedence in de volgorde waarin
-  je ze selecteert.
-- **Mislukt er een stap halverwege?** Dan vertelt de foutmelding precies welke stappen wél
-  gelukt zijn, zodat je weet wat je nog moet opruimen.
+## Good to know
 
-## API
+**Put the tool behind its own Zero Trust policy.** Add an application pointing at
+`http://<nas-ip>:8099`, attach your usual policy, and set `CFZT_SECURE_COOKIE=1`.
 
-Voor scripting is er één JSON-endpoint (zelfde sessiecookie-login):
+**Tunnel routes are replaced as a whole** by the Cloudflare API. The tool always reads the
+current config first, changes one rule, and keeps the `http_status:404` catch-all last — it adds
+one if it's missing.
 
-```
-GET /api/services   # alle hostnames met service, access-app, policies en dns-status
-GET /healthz        # health check, geen login nodig
-```
+**If a step fails halfway**, the error names the steps that did succeed, so you know what to
+clean up.
 
-## Data
+**JSON endpoints:** `GET /api/services` (needs login) and `GET /healthz` (doesn't).
 
-In het volume `/data` staan:
+**Data** lives in the `/data` volume: the selected tunnel and the generated cookie key. Backups
+are downloaded to your machine, never stored on the server.
 
-- `state.json` — de gekozen tunnel
-- `secret.key` — automatisch gegenereerde cookie-sleutel als je er geen opgeeft
+---
 
-Backups download je zelf; die worden niet op de server bewaard.
-
-## Tests
-
-De testsuite draait tegen een nagebootste Cloudflare-API (geen echte calls), en dekt
-aanmaken, bewerken, verwijderen, de backup-roundtrip en de login:
+## Development
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
 .venv/bin/python -m pytest tests/ -q
 ```
+
+The tests run against a mocked Cloudflare API and cover creating, editing, deleting, the backup
+roundtrip and login.
