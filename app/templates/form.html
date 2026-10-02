@@ -2,8 +2,8 @@
 {% set active_page = 'new' if mode == 'new' else 'index' %}
 {% set f = form %}
 {% block content %}
-<h1>{{ 'Nieuwe applicatie' if mode == 'new' else 'Bewerken: ' ~ row.hostname }}</h1>
-<p class="sub">Tunnel-route, Access-applicatie en policy worden in één keer gezet.</p>
+<h1>{{ 'New application' if mode == 'new' else 'Edit: ' ~ row.hostname }}</h1>
+<p class="sub">Tunnel route, Access application and policy are set in one go.</p>
 
 <form method="post" action="{{ '/new' if mode == 'new' else '/edit' }}">
 {% if mode == 'edit' %}
@@ -15,15 +15,15 @@
   <legend>Hostname</legend>
   <div class="grid c2">
     <div class="field">
-      <label for="hostname">Hostname of subdomein</label>
+      <label for="hostname">Hostname or subdomain</label>
       <input type="text" id="hostname" name="hostname" value="{{ f.hostname|default('') }}"
              placeholder="jellyfin" autocomplete="off" required>
-      <div class="hint">Alleen het subdomein invullen, dan wordt het domein hieronder eraan geplakt.</div>
+      <div class="hint">Enter just the subdomain and the domain below is appended to it.</div>
     </div>
     <div class="field">
-      <label for="zone">Domein</label>
+      <label for="zone">Domain</label>
       <select id="zone" name="zone">
-        <option value="">— volledige hostname hierboven —</option>
+        <option value="">— full hostname entered above —</option>
         {% for z in zones %}
         <option value="{{ z.name }}" {% if (f.hostname and f.hostname.endswith(z.name)) or (mode == 'new' and zones|length == 1) %}selected{% endif %}>{{ z.name }}</option>
         {% endfor %}
@@ -33,7 +33,7 @@
 </fieldset>
 
 <fieldset>
-  <legend>Origin (waar draait de dienst?)</legend>
+  <legend>Origin (where does the service run?)</legend>
   <div class="grid c3">
     <div class="field">
       <label for="scheme">Protocol</label>
@@ -49,34 +49,34 @@
              value="{{ f.host|default(settings.default_origin_host) }}" placeholder="192.168.1.9">
     </div>
     <div class="field">
-      <label for="origin_port">Poort</label>
+      <label for="origin_port">Port</label>
       <input type="text" id="origin_port" name="origin_port" value="{{ f.port|default('') }}" placeholder="8096">
     </div>
   </div>
   <div class="field">
-    <label for="path">Pad (optioneel)</label>
+    <label for="path">Path (optional)</label>
     <input type="text" id="path" name="path" value="{{ f.path|default('') }}" placeholder="/api">
-    <div class="hint">Leeg laten betekent: alle paden van deze hostname.</div>
+    <div class="hint">Leaving this empty means: every path on this hostname.</div>
   </div>
 
   <details class="adv">
-    <summary>Geavanceerde origin-opties</summary>
+    <summary>Advanced origin options</summary>
     <div style="padding-top:12px">
       <div class="check">
         <input type="checkbox" id="noTLSVerify" name="noTLSVerify" value="1" {% if f.noTLSVerify %}checked{% endif %}>
-        <label for="noTLSVerify">TLS-certificaat van de origin niet controleren <span class="hint">(nodig bij self-signed https, bv. Proxmox)</span></label>
+        <label for="noTLSVerify">Don't verify the origin's TLS certificate <span class="hint">(needed for self-signed https, e.g. Proxmox)</span></label>
       </div>
       <div class="check">
         <input type="checkbox" id="http2Origin" name="http2Origin" value="1" {% if f.http2Origin %}checked{% endif %}>
-        <label for="http2Origin">HTTP/2 naar de origin</label>
+        <label for="http2Origin">Use HTTP/2 to the origin</label>
       </div>
       <div class="check">
         <input type="checkbox" id="disableChunkedEncoding" name="disableChunkedEncoding" value="1" {% if f.disableChunkedEncoding %}checked{% endif %}>
-        <label for="disableChunkedEncoding">Chunked encoding uitzetten</label>
+        <label for="disableChunkedEncoding">Disable chunked encoding</label>
       </div>
       <div class="grid c2">
         <div class="field">
-          <label for="httpHostHeader">HTTP Host-header</label>
+          <label for="httpHostHeader">HTTP Host header</label>
           <input type="text" id="httpHostHeader" name="httpHostHeader" value="{{ f.httpHostHeader|default('') }}">
         </div>
         <div class="field">
@@ -90,8 +90,8 @@
           <input type="number" id="connectTimeout" name="connectTimeout" value="{{ f.connectTimeout|default('') }}">
         </div>
         <div class="field">
-          <label for="raw_service">Service handmatig (overschrijft bovenstaande)</label>
-          <input type="text" id="raw_service" name="raw_service" value="" placeholder="bijv. http_status:404">
+          <label for="raw_service">Service, entered manually (overrides the fields above)</label>
+          <input type="text" id="raw_service" name="raw_service" value="" placeholder="e.g. http_status:404">
         </div>
       </div>
     </div>
@@ -102,17 +102,17 @@
   <legend>Zero Trust Access</legend>
   <div class="check">
     <input type="checkbox" id="create_app" name="create_app" value="1" {% if f.create_app|default(true) %}checked{% endif %}>
-    <label for="create_app">Access-applicatie {{ 'aanmaken' if mode == 'new' else 'actief houden' }}
-      {% if mode == 'edit' and row.has_app %}<span class="hint">(uitvinken = Access-app verwijderen, hostname blijft dan onbeveiligd)</span>{% endif %}
+    <label for="create_app">{{ 'Create an Access application' if mode == 'new' else 'Keep the Access application' }}
+      {% if mode == 'edit' and row.has_app %}<span class="hint">(unchecking deletes the Access app, leaving the hostname unprotected)</span>{% endif %}
     </label>
   </div>
   <div class="grid c2">
     <div class="field">
-      <label for="app_name">Naam van de applicatie</label>
+      <label for="app_name">Application name</label>
       <input type="text" id="app_name" name="app_name" value="{{ f.app_name|default('') }}" placeholder="Jellyfin">
     </div>
     <div class="field">
-      <label for="session_duration">Sessieduur</label>
+      <label for="session_duration">Session duration</label>
       <select id="session_duration" name="session_duration">
         {% for d in ['30m', '6h', '12h', '24h', '168h', '730h'] %}
         <option value="{{ d }}" {% if f.session_duration|default('24h') == d %}selected{% endif %}>{{ d }}</option>
@@ -121,7 +121,7 @@
     </div>
   </div>
   <div class="field">
-    <label for="policies">Policies (ctrl/cmd-klik voor meerdere)</label>
+    <label for="policies">Policies (ctrl/cmd-click to select more than one)</label>
     <select id="policies" name="policies" multiple size="8">
       {% for p in policies %}
       <option value="{{ p.id }}" {% if p.id in selected_policies %}selected{% endif %}>
@@ -129,11 +129,11 @@
       </option>
       {% endfor %}
     </select>
-    <div class="hint">Dit zijn je herbruikbare policies uit Zero Trust → Access controls → Policies.</div>
+    <div class="hint">These are your reusable policies from Zero Trust → Access controls → Policies.</div>
   </div>
   <div class="check">
     <input type="checkbox" id="launcher_visible" name="launcher_visible" value="1" {% if f.launcher_visible|default(true) %}checked{% endif %}>
-    <label for="launcher_visible">Tonen in de App Launcher</label>
+    <label for="launcher_visible">Show in the App Launcher</label>
   </div>
 </fieldset>
 
@@ -142,27 +142,27 @@
   {% if mode == 'edit' and not row.has_route %}
   <div class="check">
     <input type="checkbox" id="create_route" name="create_route" value="1">
-    <label for="create_route">Tunnel-route aanmaken voor deze hostname <span class="hint">(bestaat nu nog niet)</span></label>
+    <label for="create_route">Create a tunnel route for this hostname <span class="hint">(there isn't one yet)</span></label>
   </div>
   {% endif %}
   <div class="check">
     <input type="checkbox" id="create_dns" name="create_dns" value="1"
            {% if zones and not (mode == 'edit' and row.dns_ok) %}checked{% endif %}>
-    <label for="create_dns">CNAME naar de tunnel aanmaken/bijwerken
-      <span class="hint">(uitvinken als je al een wildcard-CNAME hebt)</span>
+    <label for="create_dns">Create or update the CNAME pointing at the tunnel
+      <span class="hint">(uncheck if you already have a wildcard CNAME)</span>
     </label>
   </div>
-  {% if not zones %}<div class="hint">Geen zones zichtbaar — het token mist Zone:Read/DNS:Edit. DNS doe je dan handmatig.</div>{% endif %}
+  {% if not zones %}<div class="hint">No zones visible — the token is missing Zone:Read / DNS:Edit, so you'll have to handle DNS yourself.</div>{% endif %}
 </fieldset>
 
 <div class="form-actions">
-  <button class="btn primary" type="submit">{{ 'Applicatie aanmaken' if mode == 'new' else 'Opslaan' }}</button>
-  <a class="btn" href="/">Annuleren</a>
+  <button class="btn primary" type="submit">{{ 'Create application' if mode == 'new' else 'Save' }}</button>
+  <a class="btn" href="/">Cancel</a>
 </div>
 </form>
 
 <script>
-// Subdomein + domein: naam alvast invullen op basis van de hostname.
+// Prefill the application name from the hostname.
 const host = document.getElementById('hostname');
 const appName = document.getElementById('app_name');
 host.addEventListener('blur', () => {

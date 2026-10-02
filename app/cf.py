@@ -1,4 +1,4 @@
-"""Dunne async client rond de Cloudflare API + helpers voor tunnel-ingress."""
+"""Thin async client around the Cloudflare API, plus tunnel-ingress helpers."""
 from __future__ import annotations
 
 import copy
@@ -38,7 +38,7 @@ class CloudflareClient:
         try:
             resp = await self._client.request(method, path, **kwargs)
         except httpx.HTTPError as exc:
-            raise CloudflareError(f"Netwerkfout richting Cloudflare: {exc}") from exc
+            raise CloudflareError(f"Network error talking to Cloudflare: {exc}") from exc
 
         if resp.status_code == 204 or not resp.content:
             return None
@@ -47,7 +47,7 @@ class CloudflareClient:
             payload = resp.json()
         except ValueError:
             raise CloudflareError(
-                f"Onverwacht antwoord van Cloudflare (HTTP {resp.status_code})", resp.status_code
+                f"Unexpected response from Cloudflare (HTTP {resp.status_code})", resp.status_code
             )
 
         if not isinstance(payload, dict) or not payload.get("success", False):
@@ -78,7 +78,7 @@ class CloudflareClient:
             if len(chunk) < 100:
                 break
             page += 1
-            if page > 50:  # vangnet
+            if page > 50:  # safety net
                 break
         return results
 
@@ -157,8 +157,8 @@ class CloudflareClient:
 
 
 # --------------------------------------------------------------------------
-# Ingress helpers. De PUT vervangt de hele lijst, dus altijd op basis van de
-# bestaande config werken en de catch-all als laatste regel houden.
+# Ingress helpers. The PUT replaces the whole list, so always work from the
+# current config and keep the catch-all as the last rule.
 # --------------------------------------------------------------------------
 
 def rule_key(hostname: str | None, path: str | None) -> tuple[str, str]:
@@ -170,7 +170,7 @@ def is_catch_all(rule: dict) -> bool:
 
 
 def split_ingress(ingress: list[dict]) -> tuple[list[dict], dict]:
-    """Splits in (hostname-regels, catch-all)."""
+    """Split into (hostname rules, catch-all)."""
     rules = [r for r in ingress if not is_catch_all(r)]
     catch_alls = [r for r in ingress if is_catch_all(r)]
     catch_all = catch_alls[-1] if catch_alls else {"service": CATCH_ALL_SERVICE}
@@ -192,7 +192,7 @@ def find_rule(ingress: list[dict], hostname: str, path: str = "") -> dict | None
 
 
 def upsert_rule(config: dict, rule: dict, original_hostname: str = "", original_path: str = "") -> dict:
-    """Voegt een regel toe of vervangt een bestaande (op hostname+path)."""
+    """Add a rule, or replace an existing one (matched on hostname + path)."""
     config = copy.deepcopy(config)
     rules, catch_all = split_ingress(config.get("ingress") or [])
     target = rule_key(original_hostname or rule.get("hostname"), original_path or rule.get("path"))
@@ -227,6 +227,6 @@ def reorder_rules(config: dict, ordered_keys: list[tuple[str, str]]) -> dict:
     rules, catch_all = split_ingress(config.get("ingress") or [])
     by_key = {rule_key(r.get("hostname"), r.get("path")): r for r in rules}
     ordered = [by_key.pop(k) for k in ordered_keys if k in by_key]
-    ordered.extend(by_key.values())  # niet genoemde regels achteraan behouden
+    ordered.extend(by_key.values())  # keep unlisted rules at the end
     config["ingress"] = build_ingress(ordered, catch_all)
     return config

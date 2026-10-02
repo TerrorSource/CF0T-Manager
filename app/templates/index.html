@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set active_page = 'index' %}
 {% block content %}
-<h1>Applicaties</h1>
+<h1>Applications</h1>
 <p class="sub">
   {% if tunnel %}Tunnel <strong>{{ tunnel.name }}</strong>
     <span class="badge {{ 'ok' if tunnel.status == 'healthy' else 'warn' }}">{{ tunnel.status }}</span> ·
@@ -10,15 +10,15 @@
 </p>
 
 {% if meta.dns_error %}
-<div class="flash warn">DNS-status niet opgehaald ({{ meta.dns_error }}). De rest werkt gewoon.</div>
+<div class="flash warn">Could not read DNS status ({{ meta.dns_error }}). Everything else still works.</div>
 {% endif %}
 
 <div class="toolbar">
   <form method="get" action="/" style="flex:1; display:flex; gap:10px;">
-    <input type="search" name="q" value="{{ query }}" placeholder="Zoek op hostname, service of app-naam…">
-    <button class="btn" type="submit">Zoek</button>
+    <input type="search" name="q" value="{{ query }}" placeholder="Search by hostname, service or app name…">
+    <button class="btn" type="submit">Search</button>
   </form>
-  <a class="btn primary" href="/new">+ Nieuwe applicatie</a>
+  <a class="btn primary" href="/new">+ New application</a>
 </div>
 
 <div class="panel">
@@ -26,7 +26,7 @@
   <table>
     <thead>
       <tr>
-        <th>Hostname</th><th>Origin / service</th><th>Access-app</th>
+        <th>Hostname</th><th>Origin / service</th><th>Access app</th>
         <th>Policies</th><th>Status</th><th></th>
       </tr>
     </thead>
@@ -44,7 +44,7 @@
             <div class="badges">
             {% for p in row.policies %}<span class="badge">{{ p.name }}</span>{% endfor %}
             </div>
-          {% else %}<span class="badge warn">geen policy</span>{% endif %}
+          {% else %}<span class="badge warn">no policy</span>{% endif %}
         </td>
         <td>
           <div class="badges">
@@ -54,15 +54,15 @@
           </div>
         </td>
         <td class="actions">
-          <a class="btn small" href="/edit?h={{ row.hostname }}&p={{ row.path }}">Bewerken</a>
-          <a class="btn small danger" href="/delete?h={{ row.hostname }}&p={{ row.path }}">Verwijderen</a>
+          <a class="btn small" href="/edit?h={{ row.hostname }}&p={{ row.path }}">Edit</a>
+          <a class="btn small danger" href="/delete?h={{ row.hostname }}&p={{ row.path }}">Delete</a>
         </td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   {% else %}
-  <div class="empty">Nog niets gevonden. <a href="/new">Voeg je eerste applicatie toe →</a></div>
+  <div class="empty">Nothing here yet. <a href="/new">Add your first application →</a></div>
   {% endif %}
 </div>
 {% endblock %}

@@ -1,4 +1,4 @@
-"""Business-logica: tunnel-route, Access-app en DNS als één geheel behandelen."""
+"""Business logic: treat tunnel route, Access app and DNS as one unit."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -15,7 +15,7 @@ ORIGIN_INT_FIELDS = ("connectTimeout", "tlsTimeout", "tcpKeepAlive", "keepAliveT
 
 @dataclass
 class ServiceRow:
-    """Eén hostname, met alles wat eraan hangt."""
+    """One hostname, with everything attached to it."""
     hostname: str
     path: str = ""
     rule: dict | None = None
@@ -53,7 +53,7 @@ class ServiceRow:
 
 
 def normalize_domain(value: str) -> tuple[str, str]:
-    """'app.example.com/pad' -> ('app.example.com', '/pad')."""
+    """'app.example.com/path' -> ('app.example.com', '/path')."""
     value = (value or "").strip().lower().rstrip("/")
     value = value.removeprefix("https://").removeprefix("http://")
     if "/" in value:
@@ -70,7 +70,7 @@ def normalize_path(value: str) -> str:
 
 
 def build_origin_request(form: dict[str, Any]) -> dict:
-    """Alleen expliciet ingevulde origin-opties meesturen."""
+    """Only send origin options that were actually filled in."""
     origin: dict[str, Any] = {}
     for key in ORIGIN_BOOL_FIELDS:
         if form.get(key):
@@ -99,12 +99,12 @@ def build_service_url(scheme: str, host: str, port: str, raw: str = "") -> str:
     if scheme in {"unix", "http_status"}:
         return f"{scheme}:{host or port}"
     if not host:
-        raise ValueError("Origin-host is verplicht.")
+        raise ValueError("Origin host is required.")
     return f"{scheme}://{host}:{port}" if port else f"{scheme}://{host}"
 
 
 def parse_service_url(service: str) -> dict:
-    """Omgekeerde van build_service_url, voor het edit-formulier."""
+    """Inverse of build_service_url, for the edit form."""
     service = (service or "").strip()
     out = {"scheme": "http", "host": "", "port": "", "raw": ""}
     if "://" not in service:
@@ -138,7 +138,7 @@ class ZeroTrustManager:
         self.cf = client
         self.tunnel_id = tunnel_id
 
-    # ---------------- lezen ----------------
+    # ---------------- reading ----------------
     async def load_overview(self, with_dns: bool = True) -> tuple[list[ServiceRow], dict]:
         config = await self.cf.get_tunnel_config(self.tunnel_id)
         apps = await self.cf.list_access_apps()
@@ -161,7 +161,7 @@ class ZeroTrustManager:
                 matched_app_ids.add(app["id"])
             rows.append(ServiceRow(hostname=host, path=path, rule=rule, app=app))
 
-        # Access-apps zonder bijbehorende tunnel-route ook tonen
+        # Also show Access apps that have no matching tunnel route
         for (host, path), app in apps_by_domain.items():
             if app.get("id") in matched_app_ids:
                 continue
@@ -200,7 +200,7 @@ class ZeroTrustManager:
                 return row
         return None
 
-    # ---------------- schrijven ----------------
+    # ---------------- writing ----------------
     async def save_route(self, hostname: str, path: str, service: str, origin: dict,
                          original_hostname: str = "", original_path: str = "") -> None:
         rule: dict = {"hostname": hostname, "service": service}
@@ -246,37 +246,37 @@ class ZeroTrustManager:
         return await self.cf.update_access_app(app["id"], payload)
 
     async def ensure_dns(self, hostname: str, zones: list[dict]) -> str:
-        """CNAME naar <tunnel>.cfargotunnel.com aanmaken als die er nog niet is."""
+        """Create the CNAME to <tunnel>.cfargotunnel.com if it isn't there yet."""
         zone = zone_for_hostname(hostname, zones)
         if not zone:
-            raise CloudflareError(f"Geen zone gevonden voor {hostname}.")
+            raise CloudflareError(f"No zone found for {hostname}.")
         target = f"{self.tunnel_id}.cfargotunnel.com"
         existing = await self.cf.list_dns_records(zone["id"], name=hostname)
         for record in existing:
             if record.get("type") == "CNAME" and record.get("content") == target:
-                return "DNS-record bestond al."
+                return "DNS record already existed."
             if record.get("type") in {"CNAME", "A", "AAAA"}:
                 await self.cf.update_dns_record(zone["id"], record["id"], {
                     "type": "CNAME", "name": hostname, "content": target, "proxied": True,
                 })
-                return "Bestaand DNS-record bijgewerkt naar de tunnel."
+                return "Updated the existing DNS record to point at the tunnel."
         await self.cf.create_dns_record(zone["id"], {
             "type": "CNAME",
             "name": hostname,
             "content": target,
             "proxied": True,
-            "comment": "Beheerd door CFZeroTrustControl",
+            "comment": "Managed by CFZeroTrustControl",
         })
-        return "DNS CNAME aangemaakt."
+        return "DNS CNAME created."
 
     async def delete_dns(self, hostname: str, zones: list[dict]) -> str:
         zone = zone_for_hostname(hostname, zones)
         if not zone:
-            return "Geen zone gevonden, DNS overgeslagen."
+            return "No zone found, skipped DNS."
         records = await self.cf.list_dns_records(zone["id"], name=hostname)
         removed = 0
         for record in records:
             if record.get("type") in {"CNAME", "A", "AAAA"}:
                 await self.cf.delete_dns_record(zone["id"], record["id"])
                 removed += 1
-        return f"{removed} DNS-record(s) verwijderd." if removed else "Geen DNS-record gevonden."
+        return f"Deleted {removed} DNS record(s)." if removed else "No DNS record found."

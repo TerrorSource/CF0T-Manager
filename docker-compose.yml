@@ -1,7 +1,7 @@
-# Bouwt de image uit deze map. Gebruik deze file lokaal en voor een
-# Portainer-stack van type "Repository".
-# Wil je in Portainer de kant-en-klare image van GHCR trekken in plaats van
-# bouwen op je NAS? Gebruik dan docker-compose.ghcr.yml.
+# Builds the image from this directory. Use this file locally and for a
+# Portainer stack of type "Repository".
+# Want Portainer to pull the prebuilt GHCR image instead of building on your
+# NAS? Use docker-compose.ghcr.yml instead.
 
 services:
   cfzerotrustcontrol:
@@ -12,8 +12,8 @@ services:
     ports:
       - "${CFZT_PORT:-8099}:8080"
     environment:
-      CF_API_TOKEN: ${CF_API_TOKEN:?CF_API_TOKEN ontbreekt - zet hem in .env of in de Portainer stack-variabelen}
-      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID ontbreekt - zet hem in .env of in de Portainer stack-variabelen}
+      CF_API_TOKEN: ${CF_API_TOKEN:?CF_API_TOKEN is missing - set it in .env or in the Portainer stack variables}
+      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is missing - set it in .env or in the Portainer stack variables}
       CF_TUNNEL_ID: ${CF_TUNNEL_ID:-}
       CFZT_PASSWORD: ${CFZT_PASSWORD:-}
       CFZT_SECRET_KEY: ${CFZT_SECRET_KEY:-}

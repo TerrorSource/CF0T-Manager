@@ -1,4 +1,4 @@
-"""Smoke/unit tests met een nep-Cloudflare API (httpx MockTransport)."""
+"""Smoke/unit tests against a fake Cloudflare API (httpx MockTransport)."""
 import json, os, sys
 os.environ.update({
     "CF_API_TOKEN": "fake-token", "CF_ACCOUNT_ID": "acct123",
@@ -71,7 +71,7 @@ def handler(request: httpx.Request) -> httpx.Response:
     if "/dns_records/" in path and method == "DELETE":
         rid = path.rsplit("/", 1)[-1]
         STATE["dns"] = [r for r in STATE["dns"] if r["id"] != rid]; return ok({"id": rid})
-    return httpx.Response(404, json={"success": False, "errors": [{"code": 1, "message": f"geen mock voor {method} {path}"}]})
+    return httpx.Response(404, json={"success": False, "errors": [{"code": 1, "message": f"no mock for {method} {path}"}]})
 
 client = cf.CloudflareClient("fake", "acct123")
 client._client = httpx.AsyncClient(base_url=cf.API_BASE, transport=httpx.MockTransport(handler),
@@ -114,10 +114,10 @@ def test_create_full_app():
 
     rule = cf.find_rule(STATE["config"]["ingress"], "jellyfin.makooy.nl")
     assert rule and rule["service"] == "http://192.168.1.9:8096"
-    assert cf.is_catch_all(STATE["config"]["ingress"][-1]), "catch-all moet laatste blijven"
+    assert cf.is_catch_all(STATE["config"]["ingress"][-1]), "catch-all must stay last"
     app = [a for a in STATE["apps"] if a["domain"] == "jellyfin.makooy.nl"][0]
     assert app["type"] == "self_hosted"
-    assert [p["id"] for p in app["policies"]] == ["pol1", "pol2"], "beide policies gekoppeld"
+    assert [p["id"] for p in app["policies"]] == ["pol1", "pol2"], "both policies attached"
     assert any(r["name"] == "jellyfin.makooy.nl" and r["content"].endswith("cfargotunnel.com")
                for r in STATE["dns"])
 
@@ -139,7 +139,7 @@ def test_edit_changes_service_and_policies():
     assert rule["originRequest"]["noTLSVerify"] is True
     app = [a for a in STATE["apps"] if a["domain"] == "sonarr.makooy.nl"][0]
     assert app["session_duration"] == "6h"
-    assert len(STATE["config"]["ingress"]) == 4, "geen dubbele regel"
+    assert len(STATE["config"]["ingress"]) == 4, "no duplicate rule"
 
 def test_delete_everything():
     login()
@@ -161,7 +161,7 @@ def test_backup_roundtrip():
     assert data["format"] == "cfzerotrustcontrol/1"
     assert len(data["tunnel_config"]["ingress"]) == len(STATE["config"]["ingress"])
 
-    # route weghalen, dan restore -> moet terugkomen
+    # remove a route, then restore -> it should come back
     STATE["config"] = cf.remove_rule(STATE["config"], "ha.makooy.nl")
     assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl") is None
     r = tc.post("/backup/preview", files={"backup": ("b.json", json.dumps(data), "application/json")})
@@ -180,7 +180,7 @@ def test_ingress_helpers():
     assert len(out["ingress"]) == 3 and out["ingress"][0]["service"] == "http://9:9"
     out = cf.remove_rule(out, "a.nl")
     assert len(out["ingress"]) == 2 and cf.is_catch_all(out["ingress"][-1])
-    # config zonder catch-all krijgt er een
+    # a config without a catch-all gets one
     out = cf.upsert_rule({"ingress": []}, {"hostname": "c.nl", "service": "http://3:3"})
     assert out["ingress"][-1]["service"] == "http_status:404"
 

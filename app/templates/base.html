@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="nl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,15 +12,15 @@
 <header class="topbar">
   <span class="brand"><span class="dot"></span> CFZeroTrustControl</span>
   <nav class="topnav">
-    <a href="/" class="{{ 'active' if active_page == 'index' }}">Overzicht</a>
-    <a href="/new" class="{{ 'active' if active_page == 'new' }}">Nieuwe applicatie</a>
+    <a href="/" class="{{ 'active' if active_page == 'index' }}">Applications</a>
+    <a href="/new" class="{{ 'active' if active_page == 'new' }}">New application</a>
     <a href="/backup" class="{{ 'active' if active_page == 'backup' }}">Backup</a>
-    <a href="/setup" class="{{ 'active' if active_page == 'setup' }}">Instellingen</a>
+    <a href="/setup" class="{{ 'active' if active_page == 'setup' }}">Settings</a>
   </nav>
   <span class="spacer"></span>
   {% if tunnel_id %}<span class="tunnel-chip mono">tunnel {{ tunnel_id[:8] }}…</span>{% endif %}
   {% if settings.auth_enabled %}
-  <form method="post" action="/logout"><button class="btn small">Uitloggen</button></form>
+  <form method="post" action="/logout"><button class="btn small">Log out</button></form>
   {% endif %}
 </header>
 {% endif %}

@@ -1,4 +1,4 @@
-"""Sessie-login voor de web UI (één gedeeld wachtwoord)."""
+"""Session login for the web UI (one shared password)."""
 from __future__ import annotations
 
 import hmac

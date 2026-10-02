@@ -1,25 +1,25 @@
-# Draait de kant-en-klare multi-arch image van GitHub Container Registry.
-# Bedoeld om in Portainer te plakken (Stacks > Add stack > Web editor):
-# er wordt niets gebouwd op je NAS, alleen gepulld.
+# Runs the prebuilt multi-arch image from the GitHub Container Registry.
+# Meant to be pasted into Portainer (Stacks > Add stack > Web editor):
+# nothing is built on your NAS, the image is only pulled.
 #
-# Zet in Portainer onder "Environment variables" minimaal:
-#   CFZT_IMAGE      ghcr.io/<jouw-github-naam>/<repo-naam>:latest
-#   CF_API_TOKEN    <je Cloudflare API-token>
-#   CF_ACCOUNT_ID   <je Cloudflare account-ID>
-#   CFZT_PASSWORD   <wachtwoord voor de web-UI>
+# Under "Environment variables" in Portainer, set at least:
+#   CFZT_IMAGE      ghcr.io/<your-github-name>/<repo-name>:latest
+#   CF_API_TOKEN    <your Cloudflare API token>
+#   CF_ACCOUNT_ID   <your Cloudflare account ID>
+#   CFZT_PASSWORD   <password for the web UI>
 #   CFZT_SECRET_KEY <openssl rand -hex 32>
 
 services:
   cfzerotrustcontrol:
-    image: ${CFZT_IMAGE:?zet CFZT_IMAGE, bijvoorbeeld ghcr.io/jouwnaam/cfzerotrustcontrol:latest}
+    image: ${CFZT_IMAGE:?set CFZT_IMAGE, for example ghcr.io/yourname/cfzerotrustcontrol:latest}
     container_name: cfzerotrustcontrol
     restart: unless-stopped
     pull_policy: always
     ports:
       - "${CFZT_PORT:-8099}:8080"
     environment:
-      CF_API_TOKEN: ${CF_API_TOKEN:?CF_API_TOKEN ontbreekt}
-      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID ontbreekt}
+      CF_API_TOKEN: ${CF_API_TOKEN:?CF_API_TOKEN is missing}
+      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is missing}
       CF_TUNNEL_ID: ${CF_TUNNEL_ID:-}
       CFZT_PASSWORD: ${CFZT_PASSWORD:-}
       CFZT_SECRET_KEY: ${CFZT_SECRET_KEY:-}

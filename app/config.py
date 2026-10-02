@@ -1,4 +1,4 @@
-"""Configuratie uit environment variables + een klein stukje persistente state."""
+"""Configuration from environment variables, plus a little persistent state."""
 from __future__ import annotations
 
 import json
@@ -48,8 +48,7 @@ class Settings:
         return bool(self.api_token and self.account_id)
 
     def _persisted_secret(self) -> str:
-        """Geen SECRET_KEY opgegeven: er wordt er een gegenereerd en bewaard,
-        zodat sessies een herstart overleven."""
+        """No SECRET_KEY given: generate one and store it, so sessions survive a restart."""
         path = self.data_dir / "secret.key"
         try:
             if path.exists():
@@ -68,7 +67,7 @@ class Settings:
 
 
 class State:
-    """Kleine key/value store op schijf (op dit moment: de gekozen tunnel)."""
+    """Small on-disk key/value store (currently: the selected tunnel)."""
 
     def __init__(self, path: Path) -> None:
         self._path = path

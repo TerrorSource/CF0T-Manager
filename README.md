@@ -49,9 +49,9 @@ docker compose up -d --build
 ### Step 4 — Open it
 
 Go to **http://localhost:8099** and log in. If you have more than one tunnel, pick the one you
-want to manage under **Instellingen** (Settings); with a single tunnel it's selected automatically.
+want to manage under **Settings**; with a single tunnel it's selected automatically.
 
-That's it. **Nieuwe applicatie** (New application) now creates a route, an Access app and its policies in one submit.
+That's it. **New application** now creates a route, an Access app and its policies in one submit.
 
 ---
 

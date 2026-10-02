@@ -1,4 +1,4 @@
-"""CFZeroTrustControl - web UI om Cloudflare Zero Trust apps + tunnel te beheren."""
+"""CFZeroTrustControl - web UI for managing Cloudflare Zero Trust apps and tunnel."""
 from __future__ import annotations
 
 import json
@@ -71,9 +71,9 @@ async def guard(request: Request, call_next):
     if not auth.is_logged_in(request):
         return RedirectResponse("/login", status_code=303)
     if not settings.configured and path != "/setup":
-        return redirect("/setup", err="Vul eerst CF_API_TOKEN en CF_ACCOUNT_ID in je .env in.")
+        return redirect("/setup", err="Set CF_API_TOKEN and CF_ACCOUNT_ID in your .env first.")
     if not active_tunnel_id() and path not in {"/setup", "/logout"}:
-        return redirect("/setup", err="Kies eerst een tunnel.")
+        return redirect("/setup", err="Pick a tunnel first.")
     return await call_next(request)
 
 
@@ -94,7 +94,7 @@ async def login_form(request: Request):
 async def login(request: Request, password: str = Form("")):
     if not auth.check_password(password):
         time.sleep(0.5)
-        return redirect("/login", err="Onjuist wachtwoord.")
+        return redirect("/login", err="Wrong password.")
     response = RedirectResponse("/", status_code=303)
     auth.set_session_cookie(response, auth.make_token())
     return response
@@ -119,7 +119,7 @@ async def setup(request: Request):
             tunnels = await client().list_tunnels()
             if not active_tunnel_id() and len(tunnels) == 1:
                 set_active_tunnel_id(tunnels[0]["id"])
-                return redirect("/", ok=f"Tunnel '{tunnels[0]['name']}' geselecteerd.")
+                return redirect("/", ok=f"Selected tunnel '{tunnels[0]['name']}'.")
         except CloudflareError as exc:
             error = str(exc)
     return render(request, "setup.html", tunnels=tunnels, token_info=token_info, cf_error=error)
@@ -128,9 +128,9 @@ async def setup(request: Request):
 @app.post("/setup")
 async def setup_save(request: Request, tunnel_id: str = Form("")):
     if not tunnel_id:
-        return redirect("/setup", err="Geen tunnel gekozen.")
+        return redirect("/setup", err="No tunnel selected.")
     set_active_tunnel_id(tunnel_id)
-    return redirect("/", ok="Tunnel opgeslagen.")
+    return redirect("/", ok="Tunnel saved.")
 
 
 # ------------------------------------------------------------- dashboard ---
@@ -150,7 +150,7 @@ async def dashboard(request: Request):
     return render(request, "index.html", rows=rows, meta=meta, tunnel=tunnel, query=query)
 
 
-# --------------------------------------------------------- app toevoegen ---
+# ------------------------------------------------------ add application ---
 @app.get("/new", response_class=HTMLResponse)
 async def new_form(request: Request):
     try:
@@ -174,7 +174,7 @@ async def new_submit(request: Request):
     steps: list[str] = []
     try:
         await mgr.save_route(hostname, path, service, origin)
-        steps.append("tunnel-route")
+        steps.append("tunnel route")
 
         if form.get("create_app"):
             policy_ids = form_list(form, "policies")
@@ -186,19 +186,19 @@ async def new_submit(request: Request):
                 session_duration=(form.get("session_duration") or "24h"),
                 launcher_visible=bool(form.get("launcher_visible")),
             )
-            steps.append(f"Access-app ({len(policy_ids)} policy(s))")
+            steps.append(f"Access app ({len(policy_ids)} policy/policies)")
 
         if form.get("create_dns"):
             zones = await client().list_zones()
             steps.append(await mgr.ensure_dns(hostname, zones))
     except CloudflareError as exc:
-        done = ", ".join(steps) or "niets"
-        return redirect("/", err=f"{exc} — wel al gedaan: {done}.")
+        done = ", ".join(steps) or "nothing"
+        return redirect("/", err=f"{exc} — already done: {done}.")
 
-    return redirect("/", ok=f"{hostname} aangemaakt: " + ", ".join(steps))
+    return redirect("/", ok=f"Created {hostname}: " + ", ".join(steps))
 
 
-# ---------------------------------------------------------- app bewerken ---
+# ----------------------------------------------------- edit application ---
 @app.get("/edit", response_class=HTMLResponse)
 async def edit_form(request: Request):
     hostname = request.query_params.get("h", "")
@@ -211,7 +211,7 @@ async def edit_form(request: Request):
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
     if row is None:
-        return redirect("/", err=f"{hostname} niet gevonden.")
+        return redirect("/", err=f"{hostname} not found.")
 
     origin = (row.rule or {}).get("originRequest") or {}
     parsed = services.parse_service_url(row.service)
@@ -242,16 +242,16 @@ async def edit_submit(request: Request):
     except (ValueError, CloudflareError) as exc:
         return redirect(f"/edit?h={original_host}&p={original_path}", err=str(exc))
     if row is None:
-        return redirect("/", err=f"{original_host} niet gevonden.")
+        return redirect("/", err=f"{original_host} not found.")
 
     steps: list[str] = []
     try:
         if row.has_route:
             await mgr.save_route(hostname, path, service, origin, original_host, original_path)
-            steps.append("route bijgewerkt")
+            steps.append("route updated")
         elif form.get("create_route"):
             await mgr.save_route(hostname, path, service, origin)
-            steps.append("route aangemaakt")
+            steps.append("route created")
 
         policy_ids = form_list(form, "policies")
         domain = hostname + path if path else hostname
@@ -261,25 +261,25 @@ async def edit_submit(request: Request):
 
         if row.has_app and form.get("create_app"):
             await mgr.update_app(row.app, name, domain, policy_ids, duration, visible)
-            steps.append("Access-app bijgewerkt")
+            steps.append("Access app updated")
         elif row.has_app and not form.get("create_app"):
             await client().delete_access_app(row.app["id"])
-            steps.append("Access-app verwijderd")
+            steps.append("Access app deleted")
         elif not row.has_app and form.get("create_app"):
             await mgr.create_app(name, domain, policy_ids, duration, visible)
-            steps.append("Access-app aangemaakt")
+            steps.append("Access app created")
 
         if form.get("create_dns"):
             zones = await client().list_zones()
             steps.append(await mgr.ensure_dns(hostname, zones))
     except CloudflareError as exc:
-        done = ", ".join(steps) or "niets"
-        return redirect("/", err=f"{exc} — wel al gedaan: {done}.")
+        done = ", ".join(steps) or "nothing"
+        return redirect("/", err=f"{exc} — already done: {done}.")
 
-    return redirect("/", ok=f"{hostname}: " + ", ".join(steps or ["geen wijzigingen"]))
+    return redirect("/", ok=f"{hostname}: " + ", ".join(steps or ["no changes"]))
 
 
-# -------------------------------------------------------- app verwijderen ---
+# --------------------------------------------------- delete application ---
 @app.get("/delete", response_class=HTMLResponse)
 async def delete_form(request: Request):
     hostname = request.query_params.get("h", "")
@@ -289,7 +289,7 @@ async def delete_form(request: Request):
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
     if row is None:
-        return redirect("/", err=f"{hostname} niet gevonden.")
+        return redirect("/", err=f"{hostname} not found.")
     return render(request, "delete.html", row=row)
 
 
@@ -304,24 +304,24 @@ async def delete_submit(request: Request):
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
     if row is None:
-        return redirect("/", err=f"{hostname} niet gevonden.")
+        return redirect("/", err=f"{hostname} not found.")
 
     steps: list[str] = []
     try:
         if form.get("del_app") and row.has_app:
             await client().delete_access_app(row.app["id"])
-            steps.append("Access-app verwijderd")
+            steps.append("Access app deleted")
         if form.get("del_route") and row.has_route:
             await mgr.delete_route(hostname, path)
-            steps.append("tunnel-route verwijderd")
+            steps.append("tunnel route deleted")
         if form.get("del_dns"):
             zones = await client().list_zones()
             steps.append(await mgr.delete_dns(hostname, zones))
     except CloudflareError as exc:
-        done = ", ".join(steps) or "niets"
-        return redirect("/", err=f"{exc} — wel al gedaan: {done}.")
+        done = ", ".join(steps) or "nothing"
+        return redirect("/", err=f"{exc} — already done: {done}.")
 
-    return redirect("/", ok=f"{hostname}: " + ", ".join(steps or ["niets geselecteerd"]))
+    return redirect("/", ok=f"{hostname}: " + ", ".join(steps or ["nothing selected"]))
 
 
 # ---------------------------------------------------------------- backup ---
@@ -358,13 +358,13 @@ async def backup_export():
 @app.post("/backup/preview", response_class=HTMLResponse)
 async def backup_preview(request: Request, backup: UploadFile | None = None):
     if backup is None or not backup.filename:
-        return redirect("/backup", err="Geen bestand gekozen.")
+        return redirect("/backup", err="No file selected.")
     try:
         data = json.loads((await backup.read()).decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
-        return redirect("/backup", err=f"Kon het bestand niet lezen: {exc}")
+        return redirect("/backup", err=f"Could not read that file: {exc}")
     if data.get("format") != "cfzerotrustcontrol/1":
-        return redirect("/backup", err="Dit lijkt geen CFZeroTrustControl-backup te zijn.")
+        return redirect("/backup", err="That doesn't look like a CFZeroTrustControl backup.")
 
     try:
         current_config = await client().get_tunnel_config(manager().tunnel_id)
@@ -406,7 +406,7 @@ async def backup_apply(request: Request, token: str = Form(""), restore_routes: 
                        restore_apps: str = Form("")):
     path = settings.data_dir / f"restore-{Path(token).name}.json"
     if not token or not path.exists():
-        return redirect("/backup", err="Upload verlopen, probeer opnieuw.")
+        return redirect("/backup", err="Upload expired, please try again.")
     data = json.loads(path.read_text(encoding="utf-8"))
     mgr = manager()
     steps: list[str] = []
@@ -416,7 +416,7 @@ async def backup_apply(request: Request, token: str = Form(""), restore_routes: 
             rules, catch_all = cf.split_ingress(config.get("ingress") or [])
             config["ingress"] = cf.build_ingress(rules, catch_all)
             await client().put_tunnel_config(mgr.tunnel_id, config)
-            steps.append(f"{len(rules)} tunnel-routes teruggezet")
+            steps.append(f"restored {len(rules)} tunnel routes")
         if restore_apps:
             current = {services.normalize_domain(a.get("domain") or "")
                        for a in await client().list_access_apps()}
@@ -436,12 +436,12 @@ async def backup_apply(request: Request, token: str = Form(""), restore_routes: 
                     launcher_visible=app_def.get("app_launcher_visible", True),
                 )
                 created += 1
-            steps.append(f"{created} Access-app(s) aangemaakt")
+            steps.append(f"created {created} Access app(s)")
     except CloudflareError as exc:
-        return redirect("/backup", err=f"{exc} — wel al gedaan: {', '.join(steps) or 'niets'}.")
+        return redirect("/backup", err=f"{exc} — already done: {', '.join(steps) or 'nothing'}.")
     finally:
         path.unlink(missing_ok=True)
-    return redirect("/", ok="Restore klaar: " + ", ".join(steps or ["niets geselecteerd"]))
+    return redirect("/", ok="Restore finished: " + ", ".join(steps or ["nothing selected"]))
 
 
 # ------------------------------------------------------------------ api ----
@@ -464,7 +464,7 @@ async def api_services():
 
 # -------------------------------------------------------------- helpers ----
 def form_list(form, key: str) -> list[str]:
-    """Multi-select velden: FormData.getlist, anders een gewone dict."""
+    """Multi-select fields: FormData.getlist, otherwise a plain dict."""
     if hasattr(form, "getlist"):
         return [v for v in form.getlist(key) if v]
     value = form.get(key)
@@ -479,7 +479,7 @@ def _parse_route_form(form) -> tuple[str, str, str, dict]:
     if zone and not hostname.endswith(zone):
         hostname = f"{hostname}.{zone}" if hostname else zone
     if not hostname or "." not in hostname:
-        raise ValueError("Geef een geldige hostname op.")
+        raise ValueError("Enter a valid hostname.")
     service = services.build_service_url(
         form.get("scheme", "http"), form.get("origin_host", ""),
         form.get("origin_port", ""), form.get("raw_service", ""),

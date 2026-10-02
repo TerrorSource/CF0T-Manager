@@ -25,7 +25,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Image tags en labels bepalen
+      - name: Determine image tags and labels
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -35,7 +35,7 @@ jobs:
             type=ref,event=tag
             type=sha,format=short
 
-      - name: Bouwen en pushen (amd64 + arm64)
+      - name: Build and push (amd64 + arm64)
         uses: docker/build-push-action@v6
         with:
           context: .
