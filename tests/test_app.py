@@ -30,7 +30,13 @@ def reset_state():
             {"service": "http_status:404"},
         ]},
         "apps": [{"id": "app1", "name": "Sonarr", "domain": "sonarr.makooy.nl",
-                  "type": "self_hosted", "session_duration": "24h",
+                  "type": "self_hosted", "session_duration": "24h", "aud": "aud-hash",
+                  "created_at": "2026-01-01T00:00:00Z",
+                  "allowed_idps": ["google-idp-id"],
+                  "auto_redirect_to_identity": True,
+                  "custom_deny_message": "Ask Marc for access",
+                  "enable_binding_cookie": True,
+                  "destinations": [{"type": "public", "uri": "sonarr.makooy.nl"}],
                   "policies": [{"id": "pol1", "name": "GoogleIDP-Marc-Policy", "precedence": 1}]}],
         "dns": [{"id": "dns1", "type": "CNAME", "name": "sonarr.makooy.nl",
                  "content": f"{TUNNEL}.cfargotunnel.com", "proxied": True}],
@@ -74,9 +80,13 @@ def handler(request: httpx.Request) -> httpx.Response:
         return ok(new)
     if "/access/apps/" in path and method == "PUT":
         aid = path.rsplit("/", 1)[-1]
+        for field in ("id", "aud", "created_at", "updated_at"):
+            assert field not in body, f"{field} is read-only and must not be sent back"
+        # Cloudflare replaces the whole object: whatever is not sent is lost.
         for i, a in enumerate(STATE["apps"]):
             if a["id"] == aid:
-                STATE["apps"][i] = dict(a, **body)
+                STATE["apps"][i] = {"id": a["id"], "aud": a.get("aud"),
+                                    "created_at": a.get("created_at"), **body}
         return ok(body)
     if "/access/apps/" in path and method == "DELETE":
         aid = path.rsplit("/", 1)[-1]
@@ -237,6 +247,33 @@ def test_leftover_dns_is_listed_so_it_can_be_removed():
                 follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
     assert not [d for d in STATE["dns"] if d["name"] == "sonarr.makooy.nl"]
+
+
+def test_edit_keeps_settings_this_tool_does_not_manage():
+    """A PUT replaces the whole app, so identity providers and friends must be
+    carried over instead of silently falling back to the defaults."""
+    reset_state()
+    login()
+    r = tc.post("/edit", data={
+        "original_hostname": "sonarr.makooy.nl", "original_path": "",
+        "hostname": "series.makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "8989",
+        "create_app": "1", "app_name": "Series", "session_duration": "6h",
+        "policies": ["pol2"], "launcher_visible": "1",
+    }, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+
+    app = [a for a in STATE["apps"] if a["id"] == "app1"][0]
+    assert app["allowed_idps"] == ["google-idp-id"], "identity provider choice must survive"
+    assert app["auto_redirect_to_identity"] is True, "instant auth must survive"
+    assert app["custom_deny_message"] == "Ask Marc for access"
+    assert app["enable_binding_cookie"] is True
+    # ...while the fields the tool does manage are updated
+    assert app["name"] == "Series" and app["session_duration"] == "6h"
+    assert [p["id"] for p in app["policies"]] == ["pol2"]
+    assert app["domain"] == "series.makooy.nl"
+    assert app["destinations"] == [{"type": "public", "uri": "series.makooy.nl"}], \
+        "a rename moves the hostname in destinations too"
 
 
 def test_delete_everything():

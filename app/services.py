@@ -17,6 +17,9 @@ class DnsConflict(Exception):
         self.target = target
 
 
+# Fields the API returns but will not accept back on a PUT.
+READ_ONLY_APP_FIELDS = ("id", "aud", "created_at", "updated_at")
+
 ORIGIN_BOOL_FIELDS = ("noTLSVerify", "http2Origin", "disableChunkedEncoding", "noHappyEyeballs")
 ORIGIN_STR_FIELDS = ("httpHostHeader", "originServerName", "caPool", "proxyType")
 ORIGIN_INT_FIELDS = ("connectTimeout", "tlsTimeout", "tcpKeepAlive", "keepAliveTimeout",
@@ -257,14 +260,34 @@ class ZeroTrustManager:
 
     async def update_app(self, app: dict, name: str, domain: str, policy_ids: list[str],
                          session_duration: str, launcher_visible: bool) -> dict:
-        payload: dict[str, Any] = {
+        """Updating an Access app is a PUT that replaces the whole object, so
+        start from what Cloudflare has and change only our own fields.
+        Anything configured elsewhere - identity providers, instant auth,
+        custom pages, CORS - has to survive untouched."""
+        old_domain = (app.get("domain") or "").strip()
+        payload: dict[str, Any] = {k: v for k, v in app.items()
+                                   if k not in READ_ONLY_APP_FIELDS}
+        payload.update({
             "name": name,
             "domain": domain,
             "type": app.get("type") or "self_hosted",
             "session_duration": session_duration,
             "app_launcher_visible": launcher_visible,
             "policies": [{"id": pid, "precedence": i + 1} for i, pid in enumerate(policy_ids)],
-        }
+        })
+
+        # A rename has to move the hostname in the secondary destination lists too.
+        if old_domain and domain != old_domain:
+            if isinstance(payload.get("destinations"), list):
+                payload["destinations"] = [
+                    {**d, "uri": d["uri"].replace(old_domain, domain, 1)}
+                    if isinstance(d, dict) and old_domain in (d.get("uri") or "") else d
+                    for d in payload["destinations"]
+                ]
+            if isinstance(payload.get("self_hosted_domains"), list):
+                payload["self_hosted_domains"] = [
+                    domain if d == old_domain else d for d in payload["self_hosted_domains"]
+                ]
         return await self.cf.update_access_app(app["id"], payload)
 
     async def ensure_dns(self, hostname: str, zones: list[dict], overwrite: bool = False) -> str:
