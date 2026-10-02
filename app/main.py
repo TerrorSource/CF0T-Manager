@@ -400,9 +400,17 @@ async def edit_submit(request: Request):
             await mgr.create_app(name, domain, policy_ids, duration, visible)
             steps.append("Access app created")
 
-        if form.get("create_dns"):
+        # A rename needs its own DNS record. If the old hostname had a dedicated
+        # one, carry it over even when the checkbox was left unticked: that
+        # checkbox described the old hostname, not this one.
+        renamed = hostname != original_host
+        inherits_dns = renamed and row.dns_ok
+        if form.get("create_dns") or inherits_dns:
             zones = await client().list_zones()
             steps.append(await mgr.ensure_dns(hostname, zones))
+            if inherits_dns:
+                steps.append(f"{original_host} still has a DNS record of its own, "
+                             f"listed on the overview so you can remove it")
     except CloudflareError as exc:
         done = ", ".join(steps) or "nothing"
         return redirect("/", err=f"{exc} — already done: {done}.")

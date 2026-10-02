@@ -195,6 +195,42 @@ def test_edit_changes_service_and_policies():
     assert len(STATE["config"]["ingress"]) == 3, "no duplicate rule"
 
 
+def test_rename_carries_the_dns_record_over():
+    """Renaming a hostname must not leave the new one without DNS (error 1016)."""
+    reset_state()
+    login()
+    # sonarr has a dedicated CNAME; the DNS checkbox is deliberately NOT sent,
+    # which is what the edit form does for a hostname that already has one.
+    r = tc.post("/edit", data={
+        "original_hostname": "sonarr.makooy.nl", "original_path": "",
+        "hostname": "series.makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "8989",
+        "create_app": "1", "app_name": "Sonarr", "session_duration": "24h",
+        "policies": ["pol1"], "launcher_visible": "1",
+    }, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+
+    new = [d for d in STATE["dns"] if d["name"] == "series.makooy.nl"]
+    assert new and new[0]["content"].endswith(".cfargotunnel.com"), "new hostname needs DNS"
+    assert cf.find_rule(STATE["config"]["ingress"], "series.makooy.nl")
+    assert cf.find_rule(STATE["config"]["ingress"], "sonarr.makooy.nl") is None
+
+
+def test_leftover_dns_is_listed_so_it_can_be_removed():
+    reset_state()
+    # A record pointing at the tunnel with no route and no Access app behind it.
+    STATE["config"] = cf.remove_rule(STATE["config"], "sonarr.makooy.nl")
+    STATE["apps"] = []
+    login()
+    page = tc.get("/").text
+    assert "sonarr.makooy.nl" in page and "unused DNS" in page
+
+    r = tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_dns": "1"},
+                follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+    assert not [d for d in STATE["dns"] if d["name"] == "sonarr.makooy.nl"]
+
+
 def test_delete_everything():
     reset_state()
     login()

@@ -36,6 +36,9 @@
         <td>
           <a href="https://{{ row.hostname }}{{ row.path }}" target="_blank" rel="noopener">{{ row.hostname }}</a>
           {% if row.path %}<span class="mono" style="color:var(--muted)">{{ row.path }}</span>{% endif %}
+          {% if row.dns_ok and not row.has_route and not row.has_app %}
+          <span class="badge warn" title="DNS points at the tunnel, but there is no route or Access app">unused DNS</span>
+          {% endif %}
         </td>
         <td class="mono">{{ row.service or '—' }}</td>
         <td>{{ row.app_name or '—' }}</td>

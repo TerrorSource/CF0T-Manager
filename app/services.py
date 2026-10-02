@@ -182,6 +182,18 @@ class ZeroTrustManager:
                     row.dns = dns_by_name.get(row.hostname)
                     zone = zone_for_hostname(row.hostname, zones)
                     row.zone_id = zone["id"] if zone else None
+
+                # Records still pointing at a tunnel while their route and app
+                # are gone - usually left behind by a rename.
+                known = {r.hostname for r in rows}
+                for name, record in dns_by_name.items():
+                    if name in known:
+                        continue
+                    if not str(record.get("content") or "").endswith(".cfargotunnel.com"):
+                        continue
+                    zone = zone_for_hostname(name, zones)
+                    rows.append(ServiceRow(hostname=name, rule=None, app=None, dns=record,
+                                           zone_id=zone["id"] if zone else None))
             except CloudflareError as exc:
                 meta["dns_error"] = str(exc)
 
