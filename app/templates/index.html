@@ -6,7 +6,7 @@
   {% if tunnel %}Tunnel <strong>{{ tunnel.name }}</strong>
     <span class="badge {{ 'ok' if tunnel.status == 'healthy' else 'warn' }}">{{ tunnel.status }}</span> ·
   {% endif %}
-  {{ rows|length }} hostname(s)
+  <span id="count">{{ rows|length }}</span> of {{ rows|length }} hostname(s)
 </p>
 
 {% if meta.dns_error %}
@@ -14,10 +14,9 @@
 {% endif %}
 
 <div class="toolbar">
-  <form method="get" action="/" style="flex:1; display:flex; gap:10px;">
-    <input type="search" name="q" value="{{ query }}" placeholder="Search by hostname, service or app name…">
-    <button class="btn" type="submit">Search</button>
-  </form>
+  <input type="search" id="filter" autocomplete="off" autofocus
+         placeholder="Search by hostname, service, app name or policy…">
+  <a class="btn" href="/?refresh=1" title="Fetch everything from Cloudflare again">Refresh</a>
   <a class="btn primary" href="/new">+ New application</a>
 </div>
 
@@ -32,7 +31,7 @@
     </thead>
     <tbody>
     {% for row in rows %}
-      <tr>
+      <tr data-search="{{ (row.hostname ~ ' ' ~ row.path ~ ' ' ~ row.service ~ ' ' ~ row.app_name ~ ' ' ~ (row.policies | map(attribute='name') | join(' '))) | lower }}">
         <td>
           <a href="https://{{ row.hostname }}{{ row.path }}" target="_blank" rel="noopener">{{ row.hostname }}</a>
           {% if row.path %}<span class="mono" style="color:var(--muted)">{{ row.path }}</span>{% endif %}
@@ -67,5 +66,33 @@
   {% else %}
   <div class="empty">Nothing here yet. <a href="/new">Add your first application →</a></div>
   {% endif %}
+  <div class="empty" id="no-matches" hidden>Nothing matches that search.</div>
 </div>
+
+<script>
+// Filtering happens here rather than on the server: the overview takes several
+// round trips to Cloudflare, and none of them tell us anything new.
+(function () {
+  const input = document.getElementById('filter');
+  const count = document.getElementById('count');
+  const empty = document.getElementById('no-matches');
+  if (!input) return;
+  const rows = Array.from(document.querySelectorAll('tbody tr'));
+
+  function apply() {
+    const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    for (const row of rows) {
+      const haystack = row.dataset.search || '';
+      const match = terms.every(t => haystack.includes(t));
+      row.hidden = !match;
+      if (match) shown++;
+    }
+    if (count) count.textContent = shown;
+    if (empty) empty.hidden = shown > 0 || rows.length === 0;
+  }
+  input.addEventListener('input', apply);
+  input.addEventListener('search', apply);
+})();
+</script>
 {% endblock %}

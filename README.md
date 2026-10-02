@@ -119,6 +119,10 @@ it's missing.
 **If a step fails halfway**, the error names the steps that did succeed, so you know what to clean
 up.
 
+**The overview is cached for a minute** and thrown away as soon as you change anything, so
+moving between screens does not refetch everything. Changes you make in the Cloudflare dashboard
+itself can take up to a minute to show up — the Refresh button fetches immediately.
+
 **An existing DNS record is never changed behind your back.** If the hostname already has an
 A, AAAA or CNAME record pointing elsewhere, you get a confirmation screen showing the old and the
 new value, and nothing happens until you say so.

@@ -141,6 +141,7 @@ tc = TestClient(main.app)
 @pytest.fixture(autouse=True)
 def clean_state():
     main.reset_client()
+    services.invalidate_overview()
     yield
 
 
@@ -293,6 +294,71 @@ def test_edit_keeps_settings_this_tool_does_not_manage():
     assert app["domain"] == "series.makooy.nl"
     assert app["destinations"] == [{"type": "public", "uri": "series.makooy.nl"}], \
         "a rename moves the hostname in destinations too"
+
+
+def test_adding_a_hostname_that_already_has_a_route_is_refused():
+    reset_state()
+    login()
+    before = list(STATE["config"]["ingress"])
+    r = tc.post("/new", data={
+        "hostname": "sonarr", "zone": "makooy.nl", "scheme": "http",
+        "origin_host": "10.0.0.1", "origin_port": "1234",
+    }, follow_redirects=False)
+    assert "err=" in r.headers["location"], "must not silently replace the existing route"
+    assert "already+has+a+tunnel+route" in r.headers["location"]
+    assert STATE["config"]["ingress"] == before, "nothing was changed"
+
+
+def test_renaming_onto_an_existing_hostname_is_refused():
+    reset_state()
+    login()
+    r = tc.post("/edit", data={
+        "original_hostname": "ha.makooy.nl", "original_path": "",
+        "hostname": "sonarr.makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.12", "origin_port": "8123",
+    }, follow_redirects=False)
+    assert "err=" in r.headers["location"]
+    assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl"), "original left alone"
+    assert len([r for r in STATE["config"]["ingress"]
+                if r.get("hostname") == "sonarr.makooy.nl"]) == 1, "no duplicate rule"
+
+
+def test_edit_and_delete_target_the_exact_path():
+    """A hostname with several paths must not fall back to the wrong rule."""
+    reset_state()
+    STATE["config"]["ingress"].insert(1, {"hostname": "ha.makooy.nl", "path": "/api",
+                                          "service": "http://192.168.1.12:9000"})
+    login()
+    r = tc.get("/edit?h=ha.makooy.nl&p=/api")
+    assert "9000" in r.text and "8123" not in r.text, "the /api rule is the one being edited"
+
+    r = tc.post("/delete", data={"hostname": "ha.makooy.nl", "path": "/api", "del_route": "1"},
+                follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl", "/api") is None
+    assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl"), "the catch-all rule survived"
+
+    # A path that does not exist must not hit a different rule.
+    r = tc.get("/delete?h=ha.makooy.nl&p=/nope", follow_redirects=False)
+    assert r.status_code == 303 and "not+found" in r.headers["location"]
+
+
+def test_restore_keeps_every_setting_in_the_backup():
+    reset_state()
+    login()
+    data = tc.get("/backup/export").json()
+    STATE["apps"] = []
+    r = tc.post("/backup/preview", files={"backup": ("b.json", json.dumps(data), "application/json")})
+    token = r.text.split('name="token" value="')[1].split('"')[0]
+    r = tc.post("/backup/apply", data={"token": token, "restore_apps": "1"},
+                follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+
+    restored = [a for a in STATE["apps"] if a["domain"] == "sonarr.makooy.nl"][0]
+    assert restored["allowed_idps"] == ["google-idp-id"]
+    assert restored["auto_redirect_to_identity"] is True
+    assert restored["custom_deny_message"] == "Ask Marc for access"
+    assert [p["id"] for p in restored["policies"]] == ["pol1"]
 
 
 def test_delete_everything():

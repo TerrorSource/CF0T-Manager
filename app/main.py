@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import secrets
 import time
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -53,12 +54,17 @@ def client() -> CloudflareClient:
     return _client
 
 
+def forget_cached_data() -> None:
+    services.invalidate_overview()
+
+
 def reset_client() -> None:
     global _client, _client_key
     if _client is not None:
         _stale_clients.append(_client)
     _client = None
     _client_key = None
+    forget_cached_data()
 
 
 async def probe_credentials(token: str, account_id: str) -> tuple[str, list[dict]]:
@@ -233,6 +239,7 @@ async def settings_tunnel(request: Request, tunnel_id: str = Form("")):
     if not tunnel_id:
         return redirect("/settings", err="No tunnel selected.")
     set_active_tunnel_id(tunnel_id)
+    forget_cached_data()
     return redirect("/", ok="Tunnel saved.")
 
 
@@ -269,25 +276,24 @@ async def settings_preferences(request: Request, session_hours: str = Form("12")
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     mgr = manager()
+    refresh = request.query_params.get("refresh") == "1"
     try:
-        rows, meta = await mgr.load_overview()
-        tunnel = await client().get_tunnel(mgr.tunnel_id)
+        (rows, meta), tunnel = await asyncio.gather(
+            mgr.load_overview(refresh=refresh),
+            client().get_tunnel(mgr.tunnel_id),
+        )
     except CloudflareError as exc:
-        return render(request, "index.html", rows=[], meta={}, tunnel=None,
-                      err_msg=str(exc), query="")
-    query = (request.query_params.get("q") or "").strip().lower()
-    if query:
-        rows = [r for r in rows if query in r.hostname or query in r.service.lower()
-                or query in r.app_name.lower()]
-    return render(request, "index.html", rows=rows, meta=meta, tunnel=tunnel, query=query)
+        return render(request, "index.html", rows=[], meta={}, tunnel=None, err_msg=str(exc))
+    return render(request, "index.html", rows=rows, meta=meta, tunnel=tunnel)
 
 
 # ------------------------------------------------------ add application ---
 @app.get("/new", response_class=HTMLResponse)
 async def new_form(request: Request):
     try:
-        policies = await client().list_policies()
-        zones = await client().list_zones()
+        policies, zones = await asyncio.gather(
+            client().list_policies(), client().list_zones()
+        )
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
     return render(request, "form.html", mode="new", policies=policies, zones=zones,
@@ -339,9 +345,9 @@ async def edit_form(request: Request):
     path = services.normalize_path(request.query_params.get("p", ""))
     mgr = manager()
     try:
-        row = await mgr.get_row(hostname, path)
-        policies = await client().list_policies()
-        zones = await client().list_zones()
+        row, policies, zones = await asyncio.gather(
+            mgr.get_row(hostname, path), client().list_policies(), client().list_zones()
+        )
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
     if row is None:
@@ -402,6 +408,7 @@ async def edit_submit(request: Request):
             steps.append("Access app updated")
         elif row.has_app and not form.get("create_app"):
             await client().delete_access_app(row.app["id"])
+            services.invalidate_overview(mgr.tunnel_id)
             steps.append("Access app deleted")
         elif not row.has_app and form.get("create_app"):
             await mgr.create_app(name, domain, policy_ids, duration, visible)
@@ -458,6 +465,7 @@ async def delete_submit(request: Request):
     try:
         if form.get("del_app") and row.has_app:
             await client().delete_access_app(row.app["id"])
+            services.invalidate_overview(mgr.tunnel_id)
             steps.append("Access app deleted")
         if form.get("del_route") and row.has_route:
             await mgr.delete_route(hostname, path)
@@ -575,6 +583,7 @@ async def backup_apply(request: Request, token: str = Form(""), restore_routes: 
             rules, catch_all = cf.split_ingress(config.get("ingress") or [])
             config["ingress"] = cf.build_ingress(rules, catch_all)
             await client().put_tunnel_config(mgr.tunnel_id, config)
+            services.invalidate_overview(mgr.tunnel_id)
             steps.append(f"restored {len(rules)} tunnel routes")
         if restore_apps:
             current = {services.normalize_domain(a.get("domain") or "")
@@ -586,14 +595,7 @@ async def backup_apply(request: Request, token: str = Form(""), restore_routes: 
                     continue
                 if services.normalize_domain(domain) in current:
                     continue
-                await mgr.create_app(
-                    name=app_def.get("name") or domain,
-                    domain=domain,
-                    policy_ids=[p.get("id") for p in (app_def.get("policies") or [])
-                                if p.get("id") and p.get("reusable", True)],
-                    session_duration=app_def.get("session_duration") or "24h",
-                    launcher_visible=app_def.get("app_launcher_visible", True),
-                )
+                await mgr.recreate_app(app_def)
                 created += 1
             steps.append(f"created {created} Access app(s)")
     except CloudflareError as exc:

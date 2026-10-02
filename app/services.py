@@ -1,11 +1,26 @@
 """Business logic: treat tunnel route, Access app and DNS as one unit."""
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from . import cf
 from .cf import CloudflareClient, CloudflareError
+
+# The overview needs four or five round trips to Cloudflare, so it is kept
+# briefly and thrown away as soon as anything is written.
+OVERVIEW_TTL = 60.0
+_overview_cache: dict[str, tuple[float, list, dict]] = {}
+
+
+def invalidate_overview(tunnel_id: str = "") -> None:
+    if tunnel_id:
+        _overview_cache.pop(tunnel_id, None)
+    else:
+        _overview_cache.clear()
+
 
 class DnsConflict(Exception):
     """A different record already exists on this hostname, so the user decides."""
@@ -167,9 +182,41 @@ class ZeroTrustManager:
         self.tunnel_id = tunnel_id
 
     # ---------------- reading ----------------
-    async def load_overview(self, with_dns: bool = True) -> tuple[list[ServiceRow], dict]:
-        config = await self.cf.get_tunnel_config(self.tunnel_id)
-        apps = await self.cf.list_access_apps()
+    async def _zones_and_dns(self) -> tuple[list[dict], dict[str, dict], str]:
+        """Zones plus their records, in parallel. Missing permissions are not
+        fatal: the rest of the overview works without DNS."""
+        try:
+            zones = await self.cf.list_zones()
+            per_zone = await asyncio.gather(
+                *(self.cf.list_dns_records(zone["id"]) for zone in zones)
+            )
+        except CloudflareError as exc:
+            return [], {}, str(exc)
+
+        by_name: dict[str, dict] = {}
+        for records in per_zone:
+            for record in records:
+                if record.get("type") in {"CNAME", "A", "AAAA"}:
+                    by_name.setdefault((record.get("name") or "").lower(), record)
+        return zones, by_name, ""
+
+    async def load_overview(self, with_dns: bool = True,
+                            refresh: bool = False) -> tuple[list[ServiceRow], dict]:
+        cached = _overview_cache.get(self.tunnel_id)
+        if cached and not refresh and time.monotonic() - cached[0] < OVERVIEW_TTL:
+            return cached[1], cached[2]
+
+        if with_dns:
+            config, apps, (zones, dns_by_name, dns_error) = await asyncio.gather(
+                self.cf.get_tunnel_config(self.tunnel_id),
+                self.cf.list_access_apps(),
+                self._zones_and_dns(),
+            )
+        else:
+            config, apps = await asyncio.gather(
+                self.cf.get_tunnel_config(self.tunnel_id), self.cf.list_access_apps()
+            )
+            zones, dns_by_name, dns_error = [], {}, ""
 
         apps_by_domain: dict[tuple[str, str], dict] = {}
         for app in apps:
@@ -195,48 +242,39 @@ class ZeroTrustManager:
                 continue
             rows.append(ServiceRow(hostname=host, path=path, rule=None, app=app))
 
-        meta: dict[str, Any] = {"config": config, "apps": apps, "zones": [], "dns_error": None}
+        meta: dict[str, Any] = {"config": config, "apps": apps, "zones": zones,
+                                "dns_error": dns_error or None}
 
-        if with_dns:
-            try:
-                zones = await self.cf.list_zones()
-                meta["zones"] = zones
-                dns_by_name: dict[str, dict] = {}
-                for zone in zones:
-                    for record in await self.cf.list_dns_records(zone["id"]):
-                        if record.get("type") in {"CNAME", "A", "AAAA"}:
-                            dns_by_name.setdefault((record.get("name") or "").lower(), record)
-                for row in rows:
-                    row.dns = dns_by_name.get(row.hostname)
-                    zone = zone_for_hostname(row.hostname, zones)
-                    row.zone_id = zone["id"] if zone else None
+        if dns_by_name:
+            for row in rows:
+                row.dns = dns_by_name.get(row.hostname)
+                zone = zone_for_hostname(row.hostname, zones)
+                row.zone_id = zone["id"] if zone else None
 
-                # Records still pointing at a tunnel while their route and app
-                # are gone - usually left behind by a rename.
-                known = {r.hostname for r in rows}
-                for name, record in dns_by_name.items():
-                    if name in known:
-                        continue
-                    if not str(record.get("content") or "").endswith(".cfargotunnel.com"):
-                        continue
-                    zone = zone_for_hostname(name, zones)
-                    rows.append(ServiceRow(hostname=name, rule=None, app=None, dns=record,
-                                           zone_id=zone["id"] if zone else None))
-            except CloudflareError as exc:
-                meta["dns_error"] = str(exc)
+            # Records still pointing at a tunnel while their route and app are
+            # gone - usually left behind by a rename.
+            known = {r.hostname for r in rows}
+            for name, record in dns_by_name.items():
+                if name in known:
+                    continue
+                if not str(record.get("content") or "").endswith(".cfargotunnel.com"):
+                    continue
+                zone = zone_for_hostname(name, zones)
+                rows.append(ServiceRow(hostname=name, rule=None, app=None, dns=record,
+                                       zone_id=zone["id"] if zone else None))
 
         rows.sort(key=lambda r: (r.hostname, r.path))
+        _overview_cache[self.tunnel_id] = (time.monotonic(), rows, meta)
         return rows, meta
 
     async def get_row(self, hostname: str, path: str = "") -> ServiceRow | None:
+        """Exact match only. Falling back to another path on the same hostname
+        would edit or delete a rule the user did not pick."""
         rows, _ = await self.load_overview(with_dns=True)
         host = (hostname or "").lower()
         path = normalize_path(path)
         for row in rows:
             if row.hostname == host and row.path == path:
-                return row
-        for row in rows:
-            if row.hostname == host:
                 return row
         return None
 
@@ -248,14 +286,28 @@ class ZeroTrustManager:
             rule["path"] = path
         if origin:
             rule["originRequest"] = origin
+
         config = await self.cf.get_tunnel_config(self.tunnel_id)
+
+        # Adding a hostname that already has a route, or renaming onto one,
+        # would quietly overwrite it. Refuse instead.
+        target = cf.rule_key(hostname, path)
+        previous = cf.rule_key(original_hostname, original_path) if original_hostname else None
+        if previous != target and cf.find_rule(config.get("ingress") or [], hostname, path):
+            raise CloudflareError(
+                f"{hostname}{path} already has a tunnel route. Edit that one instead, "
+                f"or remove it first."
+            )
+
         config = cf.upsert_rule(config, rule, original_hostname, original_path)
         await self.cf.put_tunnel_config(self.tunnel_id, config)
+        invalidate_overview(self.tunnel_id)
 
     async def delete_route(self, hostname: str, path: str = "") -> None:
         config = await self.cf.get_tunnel_config(self.tunnel_id)
         config = cf.remove_rule(config, hostname, path)
         await self.cf.put_tunnel_config(self.tunnel_id, config)
+        invalidate_overview(self.tunnel_id)
 
     async def create_app(self, name: str, domain: str, policy_ids: list[str],
                          session_duration: str = "24h", launcher_visible: bool = True,
@@ -271,6 +323,18 @@ class ZeroTrustManager:
             payload["policies"] = [
                 {"id": pid, "precedence": idx + 1} for idx, pid in enumerate(policy_ids)
             ]
+        invalidate_overview(self.tunnel_id)
+        return await self.cf.create_access_app(payload)
+
+    async def recreate_app(self, app_def: dict) -> dict:
+        """Restore an application from a backup with all of its settings, not
+        just the handful this tool manages."""
+        payload = {k: v for k, v in app_def.items() if k not in READ_ONLY_APP_FIELDS}
+        reusable = [p for p in (app_def.get("policies") or [])
+                    if p.get("id") and p.get("reusable", True)]
+        payload["policies"] = [{"id": p["id"], "precedence": i + 1}
+                               for i, p in enumerate(reusable)]
+        invalidate_overview(self.tunnel_id)
         return await self.cf.create_access_app(payload)
 
     async def update_app(self, app: dict, name: str, domain: str, policy_ids: list[str],
@@ -303,6 +367,7 @@ class ZeroTrustManager:
                 payload["self_hosted_domains"] = [
                     domain if d == old_domain else d for d in payload["self_hosted_domains"]
                 ]
+        invalidate_overview(self.tunnel_id)
         return await self.cf.update_access_app(app["id"], payload)
 
     async def ensure_dns(self, hostname: str, zones: list[dict], overwrite: bool = False) -> str:
@@ -328,6 +393,7 @@ class ZeroTrustManager:
             await self.cf.update_dns_record(zone["id"], clashing[0]["id"], {
                 "type": "CNAME", "name": hostname, "content": target, "proxied": True,
             })
+            invalidate_overview(self.tunnel_id)
             return "Existing DNS record repointed at the tunnel."
 
         await self.cf.create_dns_record(zone["id"], {
@@ -336,6 +402,7 @@ class ZeroTrustManager:
             "content": target,
             "proxied": True,
         })
+        invalidate_overview(self.tunnel_id)
         return "DNS CNAME created."
 
     async def delete_dns(self, hostname: str, zones: list[dict]) -> str:
@@ -348,4 +415,5 @@ class ZeroTrustManager:
             if record.get("type") in {"CNAME", "A", "AAAA"}:
                 await self.cf.delete_dns_record(zone["id"], record["id"])
                 removed += 1
+        invalidate_overview(self.tunnel_id)
         return f"Deleted {removed} DNS record(s)." if removed else "No DNS record found."
