@@ -7,6 +7,16 @@ from typing import Any
 from . import cf
 from .cf import CloudflareClient, CloudflareError
 
+class DnsConflict(Exception):
+    """A different record already exists on this hostname, so the user decides."""
+
+    def __init__(self, hostname: str, record: dict, target: str):
+        super().__init__(f"{hostname} already has a DNS record")
+        self.hostname = hostname
+        self.record = record
+        self.target = target
+
+
 ORIGIN_BOOL_FIELDS = ("noTLSVerify", "http2Origin", "disableChunkedEncoding", "noHappyEyeballs")
 ORIGIN_STR_FIELDS = ("httpHostHeader", "originServerName", "caPool", "proxyType")
 ORIGIN_INT_FIELDS = ("connectTimeout", "tlsTimeout", "tcpKeepAlive", "keepAliveTimeout",
@@ -257,21 +267,31 @@ class ZeroTrustManager:
         }
         return await self.cf.update_access_app(app["id"], payload)
 
-    async def ensure_dns(self, hostname: str, zones: list[dict]) -> str:
-        """Create the CNAME to <tunnel>.cfargotunnel.com if it isn't there yet."""
+    async def ensure_dns(self, hostname: str, zones: list[dict], overwrite: bool = False) -> str:
+        """Create the CNAME to <tunnel>.cfargotunnel.com if it isn't there yet.
+
+        A record that already exists and points somewhere else is never
+        changed on our own: that raises DnsConflict so the user can decide.
+        """
         zone = zone_for_hostname(hostname, zones)
         if not zone:
             raise CloudflareError(f"No zone found for {hostname}.")
         target = f"{self.tunnel_id}.cfargotunnel.com"
         existing = await self.cf.list_dns_records(zone["id"], name=hostname)
+
         for record in existing:
             if record.get("type") == "CNAME" and record.get("content") == target:
                 return "DNS record already existed."
-            if record.get("type") in {"CNAME", "A", "AAAA"}:
-                await self.cf.update_dns_record(zone["id"], record["id"], {
-                    "type": "CNAME", "name": hostname, "content": target, "proxied": True,
-                })
-                return "Updated the existing DNS record to point at the tunnel."
+
+        clashing = [r for r in existing if r.get("type") in {"CNAME", "A", "AAAA"}]
+        if clashing:
+            if not overwrite:
+                raise DnsConflict(hostname, clashing[0], target)
+            await self.cf.update_dns_record(zone["id"], clashing[0]["id"], {
+                "type": "CNAME", "name": hostname, "content": target, "proxied": True,
+            })
+            return "Existing DNS record repointed at the tunnel."
+
         await self.cf.create_dns_record(zone["id"], {
             "type": "CNAME",
             "name": hostname,

@@ -119,7 +119,9 @@ it's missing.
 **If a step fails halfway**, the error names the steps that did succeed, so you know what to clean
 up.
 
-**JSON endpoints:** `GET /api/services` (needs login) and `GET /healthz` (doesn't).
+**An existing DNS record is never changed behind your back.** If the hostname already has an
+A, AAAA or CNAME record pointing elsewhere, you get a confirmation screen showing the old and the
+new value, and nothing happens until you say so.
 
 ---
 
@@ -131,4 +133,4 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
 ```
 
 The tests run against a mocked Cloudflare API and cover the first-run wizard, login and password
-changes, creating, editing and deleting applications, and the backup roundtrip.
+changes, creating, editing and deleting applications, DNS conflicts, and the backup roundtrip.

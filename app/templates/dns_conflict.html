@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ conflict.hostname }} already has a DNS record</h1>
+<p class="sub">Nothing has been changed to it. You decide what happens.</p>
+
+{% if steps %}
+<div class="flash ok">Already done: {{ steps|join(', ') }}.</div>
+{% endif %}
+
+<div class="panel">
+  <div class="panel-head">What is there now</div>
+  <div class="panel-body">
+    <dl class="kv">
+      <dt>Name</dt><dd class="mono">{{ conflict.record.name }}</dd>
+      <dt>Type</dt><dd class="mono">{{ conflict.record.type }}</dd>
+      <dt>Points at</dt><dd class="mono">{{ conflict.record.content }}</dd>
+      <dt>Proxied</dt><dd>{{ 'yes' if conflict.record.proxied else 'no' }}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">What it would become</div>
+  <div class="panel-body">
+    <dl class="kv">
+      <dt>Type</dt><dd class="mono">CNAME</dd>
+      <dt>Points at</dt><dd class="mono">{{ conflict.target }}</dd>
+      <dt>Proxied</dt><dd>yes</dd>
+    </dl>
+    <p class="hint">The old value is not kept anywhere — note it down if you might need it.</p>
+
+    <form method="post" action="/dns/overwrite" style="margin-top:18px">
+      <input type="hidden" name="hostname" value="{{ conflict.hostname }}">
+      <div class="form-actions">
+        <button class="btn danger" type="submit">Overwrite the record</button>
+        <a class="btn" href="/">Leave it as it is</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<p class="hint">Leaving it alone is safe: the tunnel route and the Access application are already
+in place. Only this hostname will not reach the tunnel until DNS points at it.</p>
+{% endblock %}

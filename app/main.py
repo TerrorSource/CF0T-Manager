@@ -322,6 +322,8 @@ async def new_submit(request: Request):
         if form.get("create_dns"):
             zones = await client().list_zones()
             steps.append(await mgr.ensure_dns(hostname, zones))
+    except services.DnsConflict as conflict:
+        return render(request, "dns_conflict.html", conflict=conflict, steps=steps)
     except CloudflareError as exc:
         done = ", ".join(steps) or "nothing"
         return redirect("/", err=f"{exc} — already done: {done}.")
@@ -411,6 +413,8 @@ async def edit_submit(request: Request):
             if inherits_dns:
                 steps.append(f"{original_host} still has a DNS record of its own, "
                              f"listed on the overview so you can remove it")
+    except services.DnsConflict as conflict:
+        return render(request, "dns_conflict.html", conflict=conflict, steps=steps)
     except CloudflareError as exc:
         done = ", ".join(steps) or "nothing"
         return redirect("/", err=f"{exc} — already done: {done}.")
@@ -461,6 +465,17 @@ async def delete_submit(request: Request):
         return redirect("/", err=f"{exc} — already done: {done}.")
 
     return redirect("/", ok=f"{hostname}: " + ", ".join(steps or ["nothing selected"]))
+
+
+@app.post("/dns/overwrite")
+async def dns_overwrite(request: Request, hostname: str = Form("")):
+    """Only reached after the user confirmed it on the conflict screen."""
+    try:
+        zones = await client().list_zones()
+        message = await manager().ensure_dns(hostname, zones, overwrite=True)
+    except (CloudflareError, services.DnsConflict) as exc:
+        return redirect("/", err=str(exc))
+    return redirect("/", ok=f"{hostname}: {message.lower()}")
 
 
 # ---------------------------------------------------------------- backup ---
@@ -581,24 +596,6 @@ async def backup_apply(request: Request, token: str = Form(""), restore_routes: 
     finally:
         path.unlink(missing_ok=True)
     return redirect("/", ok="Restore finished: " + ", ".join(steps or ["nothing selected"]))
-
-
-# ------------------------------------------------------------------ api ----
-@app.get("/api/services")
-async def api_services():
-    try:
-        rows, _ = await manager().load_overview()
-    except CloudflareError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
-    return JSONResponse([
-        {
-            "hostname": r.hostname, "path": r.path, "service": r.service,
-            "access_app": r.app_name or None,
-            "policies": [p.get("name") for p in r.policies],
-            "dns": bool(r.dns),
-        }
-        for r in rows
-    ])
 
 
 # -------------------------------------------------------------- helpers ----

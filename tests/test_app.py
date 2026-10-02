@@ -95,6 +95,13 @@ def handler(request: httpx.Request) -> httpx.Response:
         rec = dict(body, id=f"dns{len(STATE['dns']) + 1}")
         STATE["dns"].append(rec)
         return ok(rec)
+    if "/dns_records/" in path and method == "PATCH":
+        rid = path.rsplit("/", 1)[-1]
+        for i, r in enumerate(STATE["dns"]):
+            if r["id"] == rid:
+                STATE["dns"][i] = dict(r, **body)
+                return ok(STATE["dns"][i])
+        return ok({"id": rid})
     if "/dns_records/" in path and method == "DELETE":
         rid = path.rsplit("/", 1)[-1]
         STATE["dns"] = [r for r in STATE["dns"] if r["id"] != rid]
@@ -295,9 +302,31 @@ def test_password_hashing():
     assert auth.password_problem("longenough", "longenough") == ""
 
 
-def test_api_endpoint():
+def test_existing_dns_record_is_never_overwritten_silently():
     reset_state()
+    STATE["dns"].append({"id": "dns9", "type": "A", "name": "nas.makooy.nl",
+                         "content": "192.168.1.50", "proxied": False})
     login()
-    r = tc.get("/api/services")
-    assert r.status_code == 200
-    assert "ha.makooy.nl" in [x["hostname"] for x in r.json()]
+    r = tc.post("/new", data={
+        "hostname": "nas", "zone": "makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "5000", "create_dns": "1",
+    }, follow_redirects=False)
+    assert r.status_code == 200, "a conflict shows a confirmation screen, it does not redirect"
+    assert "already has a DNS record" in r.text and "192.168.1.50" in r.text
+
+    record = [d for d in STATE["dns"] if d["name"] == "nas.makooy.nl"][0]
+    assert record["type"] == "A" and record["content"] == "192.168.1.50", "untouched"
+    assert cf.find_rule(STATE["config"]["ingress"], "nas.makooy.nl"), "route was still created"
+
+
+def test_dns_record_is_overwritten_once_confirmed():
+    reset_state()
+    STATE["dns"].append({"id": "dns9", "type": "A", "name": "nas.makooy.nl",
+                         "content": "192.168.1.50", "proxied": False})
+    login()
+    r = tc.post("/dns/overwrite", data={"hostname": "nas.makooy.nl"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+    record = [d for d in STATE["dns"] if d["name"] == "nas.makooy.nl"][0]
+    assert record["type"] == "CNAME"
+    assert record["content"] == f"{TUNNEL}.cfargotunnel.com"
+    assert record["proxied"] is True
