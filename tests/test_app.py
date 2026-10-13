@@ -4,8 +4,8 @@ import io, json, os, sys
 os.environ.setdefault("TESTDATA", "/tmp/cfzt-test-data")
 os.environ.update({
     "CF_API_TOKEN": "fake-token", "CF_ACCOUNT_ID": "acct123",
-    "CFZT_PASSWORD": "secret", "CFZT_SECRET_KEY": "x" * 32,
-    "CFZT_DATA_DIR": os.environ["TESTDATA"],
+    "CF0T_PASSWORD": "secret", "CF0T_SECRET_KEY": "x" * 32,
+    "CF0T_DATA_DIR": os.environ["TESTDATA"],
 })
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from app import auth, backups, cf, services, main
+from app.cf import CloudflareError
 from app.config import settings
 
 TUNNEL = "tunnel-abc-123"
@@ -456,7 +457,7 @@ def test_backup_roundtrip():
     r = tc.get("/backup/export")
     assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
     data = r.json()
-    assert data["format"] == "cfzerotrustcontrol/1"
+    assert data["format"] == backups.FORMAT
 
     STATE["config"] = cf.remove_rule(STATE["config"], "ha.makooy.nl")
     assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl") is None
@@ -577,6 +578,42 @@ def test_backup_before_delete_can_be_switched_off():
                                        "backup_keep": "14", "backup_before_delete": "1"},
             follow_redirects=False)
     assert settings.backup_before_delete is True
+
+
+def test_a_failed_predelete_backup_asks_before_continuing(monkeypatch):
+    reset_state()
+    login()
+    for item in backups.listing():
+        backups.remove(item["name"])
+
+    async def broken(reason):
+        raise CloudflareError("Cloudflare is unreachable")
+
+    monkeypatch.setattr(main, "collect_backup", broken)
+    data = {"hostname": "sonarr.makooy.nl", "path": "", "del_route": "1", "del_app": "1"}
+
+    r = tc.post("/delete", data=data)
+    assert r.status_code == 200, "a failed backup must not delete anything yet"
+    assert "did not work" in r.text and "Cloudflare is unreachable" in r.text
+    assert "Delete without a backup" in r.text
+    assert cf.find_rule(STATE["config"]["ingress"], "sonarr.makooy.nl"), "route untouched"
+    assert [a for a in STATE["apps"] if a["id"] == "app1"], "app untouched"
+
+    r = tc.post("/delete", data={**data, "confirmed": "1"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+    assert "backup+failed" in r.headers["location"], "the result says the backup was skipped"
+    assert cf.find_rule(STATE["config"]["ingress"], "sonarr.makooy.nl") is None
+
+
+def test_backups_from_before_the_rename_still_restore():
+    reset_state()
+    login()
+    data = tc.get("/backup/export").json()
+    assert data["format"] == "cf0t-manager/1"
+    legacy = dict(data, format="cfzerotrustcontrol/1")
+    r = tc.post("/backup/preview",
+                files={"backup": ("old.json", json.dumps(legacy), "application/json")})
+    assert r.status_code == 200 and "Check this before restoring" in r.text
 
 
 def test_retention_keeps_only_the_newest():

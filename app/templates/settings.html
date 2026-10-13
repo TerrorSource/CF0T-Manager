@@ -78,10 +78,10 @@ through environment variables win and are shown as read-only.</p>
   <div class="panel-head">Password</div>
   <div class="panel-body">
     {% if settings.env_password %}
-      <p class="hint">The password comes from <span class="mono">CFZT_PASSWORD</span>. Remove that
+      <p class="hint">The password comes from <span class="mono">CF0T_PASSWORD</span>. Remove that
         variable if you'd rather manage it here.</p>
     {% elif settings.login_disabled %}
-      <p class="hint">Login is switched off through <span class="mono">CFZT_DISABLE_LOGIN</span>.</p>
+      <p class="hint">Login is switched off through <span class="mono">CF0T_DISABLE_LOGIN</span>.</p>
     {% else %}
     <form method="post" action="/settings/password">
       <div class="field" style="max-width:420px">

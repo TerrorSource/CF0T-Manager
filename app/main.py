@@ -1,4 +1,4 @@
-"""CFZeroTrustControl - web UI for managing Cloudflare Zero Trust apps and tunnel."""
+"""CF0T-Manager - web UI for managing Cloudflare Zero Trust apps and tunnel."""
 from __future__ import annotations
 
 import csv
@@ -45,16 +45,17 @@ async def collect_backup(reason: str) -> dict:
                                  policies, reason)
 
 
-async def store_backup(kind: str, reason: str, label: str = "") -> str:
-    """Write a backup into /data and trim the old ones. Never raises."""
+async def store_backup(kind: str, reason: str, label: str = "") -> tuple[str, str]:
+    """Write a backup into /data and trim the old ones.
+    Returns (file name, error message); never raises."""
     try:
         payload = await collect_backup(reason)
         path = backups.write(payload, kind, label)
         backups.prune(kind, settings.backup_keep)
-        return path.name
-    except Exception as exc:  # a failed backup must not block the action itself
+        return path.name, ""
+    except Exception as exc:
         logger.warning("could not store a %s backup: %s", kind, exc)
-        return ""
+        return "", str(exc) or exc.__class__.__name__
 
 
 async def backup_scheduler() -> None:
@@ -66,9 +67,11 @@ async def backup_scheduler() -> None:
                 newest = backups.newest_time("auto")
                 due = newest is None or (time.time() - newest) >= settings.auto_backup_hours * 3600
                 if due:
-                    name = await store_backup("auto", "automatic")
+                    name, error = await store_backup("auto", "automatic")
                     if name:
                         logger.info("automatic backup written: %s", name)
+                    else:
+                        logger.warning("automatic backup failed: %s", error)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -103,7 +106,7 @@ async def lifespan(app: FastAPI):
             await stale.aclose()
 
 
-app = FastAPI(title="CFZeroTrustControl", lifespan=lifespan,
+app = FastAPI(title="CF0T-Manager", lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -314,7 +317,7 @@ async def settings_tunnel(request: Request, tunnel_id: str = Form("")):
 async def settings_password(request: Request, current_password: str = Form(""),
                             password: str = Form(""), password_confirm: str = Form("")):
     if settings.env_password:
-        return redirect("/settings", err="The password is set through CFZT_PASSWORD; change it there.")
+        return redirect("/settings", err="The password is set through CF0T_PASSWORD; change it there.")
     if settings.auth_enabled and not auth.check_password(current_password):
         return redirect("/settings", err="The current password is not correct.")
     problem = auth.password_problem(password, password_confirm)
@@ -395,9 +398,11 @@ def destructive_warnings(form, row=None) -> list[str]:
     return warnings
 
 
-def confirmation_page(request: Request, action: str, form, warnings: list[str]) -> HTMLResponse:
+def confirmation_page(request: Request, action: str, form, warnings: list[str],
+                      confirm_label: str = "Yes, apply it") -> HTMLResponse:
     fields = [(k, v) for k, v in form.multi_items() if k != "confirmed"]
-    return render(request, "confirm.html", action=action, fields=fields, warnings=warnings)
+    return render(request, "confirm.html", action=action, fields=fields, warnings=warnings,
+                  confirm_label=confirm_label)
 
 
 EXPORT_COLUMNS = ("Hostname", "Path", "Origin / service", "Access app", "Policies",
@@ -666,9 +671,15 @@ async def delete_submit(request: Request):
     steps: list[str] = []
     try:
         if settings.backup_before_delete:
-            name = await store_backup("predelete", f"before deleting {hostname}", hostname)
-            if name:
-                steps.append(f"backup stored ({name})")
+            name, error = await store_backup("predelete", f"before deleting {hostname}", hostname)
+            if error and not form.get("confirmed"):
+                return confirmation_page(request, "/delete", form, [
+                    f"The backup that is normally made before a delete did not work: {error}",
+                    f"If you continue, {hostname}{path} is deleted without one, and there is "
+                    f"nothing to restore from afterwards.",
+                ], confirm_label="Delete without a backup")
+            steps.append(f"backup stored ({name})" if name
+                         else "backup failed, continued on request")
 
         if form.get("del_app") and row.has_app:
             await client().delete_access_app(row.app["id"])
@@ -715,15 +726,15 @@ async def backup_export():
     return Response(
         json.dumps(payload, indent=2, ensure_ascii=False),
         media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="cfzt-backup-{stamp}.json"'},
+        headers={"Content-Disposition": f'attachment; filename="cf0t-backup-{stamp}.json"'},
     )
 
 
 @app.post("/backup/create")
 async def backup_create():
-    name = await store_backup("manual", "made by hand")
+    name, error = await store_backup("manual", "made by hand")
     if not name:
-        return redirect("/backup", err="Could not reach Cloudflare, so nothing was stored.")
+        return redirect("/backup", err=f"Nothing was stored: {error}")
     return redirect("/backup", ok=f"Backup stored as {name}.")
 
 
@@ -768,8 +779,8 @@ async def backup_preview(request: Request, backup: UploadFile | None = None):
 
 async def render_restore_preview(request: Request, data: dict):
     """Show what a restore would change, from an upload or a stored backup."""
-    if data.get("format") != backups.FORMAT:
-        return redirect("/backup", err="That doesn't look like a CFZeroTrustControl backup.")
+    if not backups.is_ours(data.get("format") or ""):
+        return redirect("/backup", err="That doesn't look like a CF0T-Manager backup.")
 
     try:
         current_config = await client().get_tunnel_config(manager().tunnel_id)

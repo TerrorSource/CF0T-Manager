@@ -16,7 +16,7 @@
       {% endfor %}
       <input type="hidden" name="confirmed" value="1">
       <div class="form-actions">
-        <button class="btn danger" type="submit">Yes, apply it</button>
+        <button class="btn danger" type="submit">{{ confirm_label|default("Yes, apply it") }}</button>
         <a class="btn" href="/">Cancel</a>
       </div>
     </form>

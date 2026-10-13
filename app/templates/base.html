@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}CFZeroTrustControl{% endblock %}</title>
+<title>{% block title %}CF0T-Manager{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%23f6821f'/></svg>">
 </head>
 <body>
 {% if show_nav|default(true) %}
 <header class="topbar">
-  <span class="brand"><span class="dot"></span> CFZeroTrustControl</span>
+  <span class="brand"><span class="dot"></span> CF0T-Manager</span>
   <nav class="topnav">
     <a href="/" class="{{ 'active' if active_page == 'index' }}">Applications</a>
     <a href="/new" class="{{ 'active' if active_page == 'new' }}">New application</a>

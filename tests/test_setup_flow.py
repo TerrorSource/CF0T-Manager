@@ -6,7 +6,8 @@ from test_app import TUNNEL, login, make_client  # noqa: F401  (shared mock tran
 from app import auth, main
 from app.config import settings
 
-CF_ENV = ("CF_API_TOKEN", "CF_ACCOUNT_ID", "CFZT_PASSWORD")
+# both spellings: CF0T_* is current, CFZT_* is still honoured
+CF_ENV = ("CF_API_TOKEN", "CF_ACCOUNT_ID", "CF0T_PASSWORD", "CFZT_PASSWORD")
 
 
 @pytest.fixture
@@ -28,7 +29,7 @@ def test_everything_redirects_to_the_wizard(blank_install):
     for path in ("/", "/new", "/settings", "/backup"):
         r = blank_install.get(path, follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"] == "/welcome", path
-    assert "Welcome to CFZeroTrustControl" in blank_install.get("/welcome").text
+    assert "Welcome to CF0T-Manager" in blank_install.get("/welcome").text
 
 
 def test_wizard_rejects_bad_credentials(blank_install):

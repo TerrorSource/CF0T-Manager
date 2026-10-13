@@ -7,20 +7,22 @@
 # web UI. Anything you do set here wins over what the UI stores.
 
 services:
-  cfzerotrustcontrol:
+  cf0t-manager:
     build: .
-    image: ${CFZT_IMAGE:-cfzerotrustcontrol:local}
-    container_name: cfzerotrustcontrol
+    image: ${CF0T_IMAGE:-cf0t-manager:local}
+    container_name: cf0t-manager
     restart: unless-stopped
     ports:
-      - "${CFZT_PORT:-8099}:8080"
+      - "${CF0T_PORT:-8099}:8080"
     environment:
       CF_API_TOKEN: ${CF_API_TOKEN:-}
       CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
       CF_TUNNEL_ID: ${CF_TUNNEL_ID:-}
-      CFZT_PASSWORD: ${CFZT_PASSWORD:-}
-      CFZT_SECRET_KEY: ${CFZT_SECRET_KEY:-}
+      CF0T_PASSWORD: ${CF0T_PASSWORD:-}
+      CF0T_SECRET_KEY: ${CF0T_SECRET_KEY:-}
     volumes:
+      # The volume name is kept from before the rename so existing data,
+      # backups and your password stay where they are.
       - cfzt-data:/data
 
 volumes:

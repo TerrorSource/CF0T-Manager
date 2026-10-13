@@ -2,27 +2,27 @@
 # Meant to be pasted into Portainer (Stacks > Add stack > Web editor):
 # nothing is built on your NAS, the image is only pulled.
 #
-# Set CFZT_IMAGE under "Environment variables" and deploy. Everything else —
-# Cloudflare token, account ID, password — is configured in the web UI the
+# Set CF0T_IMAGE under "Environment variables" and deploy. Everything else -
+# Cloudflare token, account ID, password - is configured in the web UI the
 # first time you open it.
 
 services:
-  cfzerotrustcontrol:
-    image: ${CFZT_IMAGE:?set CFZT_IMAGE, for example ghcr.io/yourname/cfzerotrustcontrol:latest}
-    container_name: cfzerotrustcontrol
+  cf0t-manager:
+    image: ${CF0T_IMAGE:?set CF0T_IMAGE, for example ghcr.io/yourname/cf0t-manager:latest}
+    container_name: cf0t-manager
     restart: unless-stopped
     pull_policy: always
     ports:
-      - "${CFZT_PORT:-8099}:8080"
+      - "${CF0T_PORT:-8099}:8080"
     environment:
       # All optional: leave them empty and use the web UI instead.
       CF_API_TOKEN: ${CF_API_TOKEN:-}
       CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
       CF_TUNNEL_ID: ${CF_TUNNEL_ID:-}
-      CFZT_PASSWORD: ${CFZT_PASSWORD:-}
-      CFZT_SECRET_KEY: ${CFZT_SECRET_KEY:-}
+      CF0T_PASSWORD: ${CF0T_PASSWORD:-}
+      CF0T_SECRET_KEY: ${CF0T_SECRET_KEY:-}
     volumes:
-      - cfzt-data:/data
+      - cf0t-data:/data
 
 volumes:
-  cfzt-data:
+  cf0t-data:

@@ -27,7 +27,7 @@ class CloudflareClient:
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
-                "User-Agent": "CFZeroTrustControl/1.0",
+                "User-Agent": "CF0T-Manager/1.0",
             },
         )
 

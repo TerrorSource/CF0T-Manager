@@ -15,11 +15,20 @@ ENV_KEYS = {
     "api_token": "CF_API_TOKEN",
     "account_id": "CF_ACCOUNT_ID",
     "tunnel_id": "CF_TUNNEL_ID",
-    "password": "CFZT_PASSWORD",
-    "session_hours": "CFZT_SESSION_HOURS",
-    "secure_cookie": "CFZT_SECURE_COOKIE",
-    "default_origin_host": "CFZT_DEFAULT_ORIGIN_HOST",
+    "password": "CF0T_PASSWORD",
+    "session_hours": "CF0T_SESSION_HOURS",
+    "secure_cookie": "CF0T_SECURE_COOKIE",
+    "default_origin_host": "CF0T_DEFAULT_ORIGIN_HOST",
 }
+
+
+def read_env(name: str) -> str:
+    """CF0T_* is the current spelling; the CFZT_* names from before the rename
+    keep working so an existing deployment does not break."""
+    value = os.environ.get(name)
+    if not value and name.startswith("CF0T_"):
+        value = os.environ.get("CFZT_" + name[5:])
+    return (value or "").strip()
 
 DEFAULTS = {
     "session_hours": 12,
@@ -87,15 +96,15 @@ class Store:
 
 class Settings:
     def __init__(self) -> None:
-        self.data_dir = Path(os.environ.get("CFZT_DATA_DIR", "./data").strip() or "./data")
+        self.data_dir = Path(read_env("CF0T_DATA_DIR") or "./data")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.store = Store(self.data_dir / "config.json")
-        self.secret_key = os.environ.get("CFZT_SECRET_KEY", "").strip() or self._persisted_secret()
+        self.secret_key = read_env("CF0T_SECRET_KEY") or self._persisted_secret()
         self._migrate_state_json()
 
     # ---------- resolution ----------
     def env(self, field: str) -> str:
-        return (os.environ.get(ENV_KEYS[field]) or "").strip()
+        return read_env(ENV_KEYS[field])
 
     def source(self, field: str) -> str:
         """Where a setting comes from: 'env', 'config' or 'unset'."""
@@ -140,7 +149,7 @@ class Settings:
 
     @property
     def login_disabled(self) -> bool:
-        return _as_bool(os.environ.get("CFZT_DISABLE_LOGIN"), False)
+        return _as_bool(read_env("CF0T_DISABLE_LOGIN"), False)
 
     @property
     def auth_enabled(self) -> bool:

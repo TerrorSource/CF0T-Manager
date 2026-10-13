@@ -10,7 +10,13 @@ from typing import Any
 
 from .config import settings
 
-FORMAT = "cfzerotrustcontrol/1"
+FORMAT = "cf0t-manager/1"
+# Backups written before the rename are still restorable.
+LEGACY_FORMATS = ("cfzerotrustcontrol/1",)
+
+
+def is_ours(value: str) -> bool:
+    return value == FORMAT or value in LEGACY_FORMATS
 KINDS = ("auto", "predelete", "manual")
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,120}\.json$")
 

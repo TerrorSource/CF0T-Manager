@@ -1,4 +1,4 @@
-# CFZeroTrustControl
+# CF0T-Manager
 
 A small web UI to manage Cloudflare Zero Trust. Adding an app normally means three separate
 screens in the Cloudflare dashboard — tunnel route, Access application, policy. Here it's one form.
@@ -69,7 +69,7 @@ Then in Portainer, **Stacks → Add stack → Web editor**, paste
 
 | Variable | Value |
 |---|---|
-| `CFZT_IMAGE` | `ghcr.io/<you>/<repo>:latest` |
+| `CF0T_IMAGE` | `ghcr.io/<you>/<repo>:latest` |
 
 Deploy, open the UI on port 8099, and run through the wizard. Nothing is built on the NAS and no
 secrets live in the stack definition.
@@ -89,16 +89,19 @@ Everything can be set in the UI, so none of these are required. Anything you do 
 stored config and shows up as read-only on the Settings page — handy if you'd rather keep secrets
 in your orchestrator.
 
+Renamed from `CFZT_*` to `CF0T_*`; the old spelling still works, so an existing deployment keeps
+running.
+
 | Variable | Description |
 |---|---|
 | `CF_API_TOKEN` | Cloudflare API token |
 | `CF_ACCOUNT_ID` | Cloudflare account ID |
 | `CF_TUNNEL_ID` | Pin to one tunnel instead of choosing in the UI |
-| `CFZT_PASSWORD` | Fixed login password instead of the one managed in the UI |
-| `CFZT_SECRET_KEY` | Session cookie key; generated in `/data/secret.key` if unset |
-| `CFZT_DISABLE_LOGIN` | `1` runs without any login — only on a trusted network |
-| `CFZT_PORT` | Host port (default 8099) |
-| `CFZT_IMAGE` | Which image to pull (GHCR compose file only) |
+| `CF0T_PASSWORD` | Fixed login password instead of the one managed in the UI |
+| `CF0T_SECRET_KEY` | Session cookie key; generated in `/data/secret.key` if unset |
+| `CF0T_DISABLE_LOGIN` | `1` runs without any login — only on a trusted network |
+| `CF0T_PORT` | Host port (default 8099) |
+| `CF0T_IMAGE` | Which image to pull (GHCR compose file only) |
 
 ---
 
