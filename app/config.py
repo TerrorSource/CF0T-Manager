@@ -160,6 +160,23 @@ class Settings:
     def default_origin_host(self) -> str:
         return self._resolve("default_origin_host", DEFAULTS["default_origin_host"])
 
+    # ---------- backups ----------
+    @property
+    def auto_backup(self) -> bool:
+        return _as_bool(self.store.get("auto_backup"), True)
+
+    @property
+    def auto_backup_hours(self) -> int:
+        return max(1, _as_int(self.store.get("auto_backup_hours"), 24))
+
+    @property
+    def backup_keep(self) -> int:
+        return max(1, _as_int(self.store.get("backup_keep"), 14))
+
+    @property
+    def backup_before_delete(self) -> bool:
+        return _as_bool(self.store.get("backup_before_delete"), True)
+
     @property
     def session_epoch(self) -> int:
         """Bumped on a password change so existing sessions stop working."""

@@ -1,5 +1,5 @@
 """Smoke/unit tests against a fake Cloudflare API (httpx MockTransport)."""
-import json, os, sys
+import io, json, os, sys
 
 os.environ.setdefault("TESTDATA", "/tmp/cfzt-test-data")
 os.environ.update({
@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from app import auth, cf, services, main
+from app import auth, backups, cf, services, main
 from app.config import settings
 
 TUNNEL = "tunnel-abc-123"
@@ -467,6 +467,133 @@ def test_backup_roundtrip():
                 follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
     assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl") is not None
+
+
+# ------------------------------------------------------- export & backups ---
+def test_csv_export():
+    reset_state()
+    login()
+    r = tc.get("/export.csv")
+    assert r.status_code == 200
+    assert "attachment" in r.headers["content-disposition"]
+    body = r.text
+    assert body.startswith("\ufeff"), "a BOM so Excel reads UTF-8 properly"
+    lines = body.lstrip("\ufeff").strip().splitlines()
+    assert lines[0].startswith("Hostname;Path;Origin / service"), lines[0]
+    assert any(line.startswith("sonarr.makooy.nl;") for line in lines)
+    assert any("GoogleIDP-Marc-Policy" in line for line in lines)
+
+
+def test_xlsx_export():
+    from openpyxl import load_workbook
+    reset_state()
+    login()
+    r = tc.get("/export.xlsx")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml")
+    sheet = load_workbook(io.BytesIO(r.content)).active
+    assert sheet.title == "Applications"
+    assert [c.value for c in sheet[1]][:3] == ["Hostname", "Path", "Origin / service"]
+    hostnames = [row[0] for row in sheet.iter_rows(min_row=2, values_only=True)]
+    assert "sonarr.makooy.nl" in hostnames and "ha.makooy.nl" in hostnames
+
+
+def test_stored_backup_roundtrip():
+    reset_state()
+    login()
+    for item in backups.listing():
+        backups.remove(item["name"])
+
+    r = tc.post("/backup/create", follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    stored = backups.listing()
+    assert len(stored) == 1 and stored[0]["kind"] == "manual"
+    assert stored[0]["routes"] == 2 and stored[0]["apps"] == 1
+
+    page = tc.get("/backup").text
+    assert stored[0]["when"] in page and "by hand" in page
+
+    # restoring a stored backup goes through the same diff screen
+    STATE["config"] = cf.remove_rule(STATE["config"], "ha.makooy.nl")
+    r = tc.post("/backup/stored", data={"name": stored[0]["name"]})
+    assert r.status_code == 200 and "ha.makooy.nl" in r.text
+    token = r.text.split('name="token" value="')[1].split('"')[0]
+    r = tc.post("/backup/apply", data={"token": token, "restore_routes": "1"},
+                follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl")
+
+    r = tc.get(f"/backup/download?name={stored[0]['name']}")
+    assert r.status_code == 200 and r.json()["format"] == backups.FORMAT
+
+    r = tc.post("/backup/remove", data={"name": stored[0]["name"]}, follow_redirects=False)
+    assert "err=" not in r.headers["location"]
+    assert backups.listing() == []
+
+
+def test_backup_names_cannot_escape_the_backup_directory():
+    reset_state()
+    login()
+    for attempt in ("../secret.key", "..%2Fconfig.json", "/etc/passwd", "config.json"):
+        assert backups.resolve(attempt) is None, attempt
+        r = tc.get(f"/backup/download?name={attempt}", follow_redirects=False)
+        assert r.status_code == 303 and "err=" in r.headers["location"]
+
+
+def test_backup_is_written_before_a_delete():
+    reset_state()
+    login()
+    for item in backups.listing():
+        backups.remove(item["name"])
+
+    r = tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_route": "1"},
+                follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    stored = backups.listing()
+    assert len(stored) == 1 and stored[0]["kind"] == "predelete"
+    assert "sonarr" in stored[0]["name"]
+    # the backup still holds the route that was just removed
+    data = backups.read(stored[0]["name"])
+    assert cf.find_rule(data["tunnel_config"]["ingress"], "sonarr.makooy.nl")
+    for item in stored:
+        backups.remove(item["name"])
+
+
+def test_backup_before_delete_can_be_switched_off():
+    reset_state()
+    login()
+    for item in backups.listing():
+        backups.remove(item["name"])
+    tc.post("/settings/backups", data={"auto_backup": "1", "auto_backup_hours": "24",
+                                       "backup_keep": "14"}, follow_redirects=False)
+    assert settings.backup_before_delete is False
+
+    tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_route": "1"},
+            follow_redirects=False)
+    assert backups.listing() == [], "no backup when the option is off"
+
+    tc.post("/settings/backups", data={"auto_backup": "1", "auto_backup_hours": "24",
+                                       "backup_keep": "14", "backup_before_delete": "1"},
+            follow_redirects=False)
+    assert settings.backup_before_delete is True
+
+
+def test_retention_keeps_only_the_newest():
+    import time as _time
+    for item in backups.listing():
+        backups.remove(item["name"])
+    for i in range(5):
+        path = backups.write({"format": backups.FORMAT, "n": i}, "auto")
+        assert path.exists(), "each write gets its own file, even within one second"
+        os.utime(path, (_time.time() - (10 - i), _time.time() - (10 - i)))
+    assert len(backups.listing()) == 5
+    assert backups.prune("auto", 2) == 3
+    left = backups.listing()
+    assert len(left) == 2
+    assert [backups.read(e["name"])["n"] for e in left] == [4, 3], "the newest two survive"
+    for item in left:
+        backups.remove(item["name"])
 
 
 # -------------------------------------------------------------- unit bits ---

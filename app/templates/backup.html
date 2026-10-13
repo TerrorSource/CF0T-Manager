@@ -7,8 +7,54 @@
 <div class="panel">
   <div class="panel-head">Export</div>
   <div class="panel-body">
-    <p class="hint" style="margin-top:0">Downloads every ingress rule on the tunnel, all Access applications and the reusable policies.</p>
-    <a class="btn primary" href="/backup/export">Download backup</a>
+    <p class="hint" style="margin-top:0">Every ingress rule on the tunnel, all Access applications and the reusable policies.</p>
+    <div class="form-actions" style="margin-top:0">
+      <a class="btn primary" href="/backup/export">Download now</a>
+      <form method="post" action="/backup/create"><button class="btn">Store one in /data</button></form>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">Stored backups</div>
+  <div class="panel-body" style="padding:0">
+    {% if stored %}
+    <table>
+      <thead>
+        <tr><th>When</th><th>Kind</th><th>Contents</th><th>Size</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for item in stored %}
+        <tr>
+          <td>{{ item.when }}</td>
+          <td>
+            {% if item.kind == 'auto' %}<span class="badge">automatic</span>
+            {% elif item.kind == 'predelete' %}<span class="badge warn">before a delete</span>
+            {% else %}<span class="badge">by hand</span>{% endif %}
+            {% if item.reason %}<div class="hint">{{ item.reason }}</div>{% endif %}
+          </td>
+          <td class="hint">
+            {% if item.routes is not none %}{{ item.routes }} routes · {{ item.apps }} apps{% else %}unreadable{% endif %}
+          </td>
+          <td class="hint">{{ item.size_kb }} kB</td>
+          <td class="actions">
+            <form method="post" action="/backup/stored" style="display:inline">
+              <input type="hidden" name="name" value="{{ item.name }}">
+              <button class="btn small">Restore</button>
+            </form>
+            <a class="btn small" href="/backup/download?name={{ item.name }}">Download</a>
+            <form method="post" action="/backup/remove" style="display:inline">
+              <input type="hidden" name="name" value="{{ item.name }}">
+              <button class="btn small danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">No stored backups yet. The first automatic one is written shortly after startup.</div>
+    {% endif %}
   </div>
 </div>
 
@@ -50,7 +96,7 @@
   <div class="panel-body">
     <form method="post" action="/backup/preview" enctype="multipart/form-data">
       <div class="field">
-        <label for="backup">Backup file (.json)</label>
+        <label for="backup">Backup file from your own machine (.json)</label>
         <input type="file" id="backup" name="backup" accept="application/json,.json" required>
       </div>
       <button class="btn" type="submit">Read and compare</button>

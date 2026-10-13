@@ -106,6 +106,39 @@ through environment variables win and are shown as read-only.</p>
 </div>
 
 <div class="panel">
+  <div class="panel-head">Backups</div>
+  <div class="panel-body">
+    <form method="post" action="/settings/backups">
+      <div class="check">
+        <input type="checkbox" id="auto_backup" name="auto_backup" value="1"
+               {% if settings.auto_backup %}checked{% endif %}>
+        <label for="auto_backup">Make an automatic backup on a schedule
+          <span class="hint">(written into the /data volume, restorable from the Backup page)</span></label>
+      </div>
+      <div class="check">
+        <input type="checkbox" id="backup_before_delete" name="backup_before_delete" value="1"
+               {% if settings.backup_before_delete %}checked{% endif %}>
+        <label for="backup_before_delete">Back up before deleting an application</label>
+      </div>
+      <div class="grid c2">
+        <div class="field">
+          <label for="auto_backup_hours">Every … hours</label>
+          <input type="number" id="auto_backup_hours" name="auto_backup_hours" min="1" max="720"
+                 value="{{ settings.auto_backup_hours }}">
+        </div>
+        <div class="field">
+          <label for="backup_keep">Keep the newest … of each kind</label>
+          <input type="number" id="backup_keep" name="backup_keep" min="1" max="365"
+                 value="{{ settings.backup_keep }}">
+          <div class="hint">Older ones are deleted automatically.</div>
+        </div>
+      </div>
+      <button class="btn primary" type="submit">Save backup settings</button>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
   <div class="panel-head">Preferences</div>
   <div class="panel-body">
     <form method="post" action="/settings/preferences">

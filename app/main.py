@@ -1,10 +1,13 @@
 """CFZeroTrustControl - web UI for managing Cloudflare Zero Trust apps and tunnel."""
 from __future__ import annotations
 
+import csv
+import io
 import json
+import asyncio
+import logging
 import secrets
 import time
-import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -15,17 +18,62 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import auth, cf, services
+from . import auth, backups, cf, services
 from .cf import CloudflareClient, CloudflareError
 from .config import active_tunnel_id, set_active_tunnel_id, settings
 from .services import ZeroTrustManager
 
+logger = logging.getLogger("cfzt")
 BASE_DIR = Path(__file__).resolve().parent
 OPEN_PATHS = {"/healthz", "/favicon.ico"}
 
 _client: CloudflareClient | None = None
 _client_key: tuple[str, str] | None = None
 _stale_clients: list[CloudflareClient] = []
+
+
+async def collect_backup(reason: str) -> dict:
+    """Everything a backup holds, fetched in parallel."""
+    mgr = manager()
+    tunnel, config, apps, policies = await asyncio.gather(
+        client().get_tunnel(mgr.tunnel_id),
+        client().get_tunnel_config(mgr.tunnel_id),
+        client().list_access_apps(),
+        client().list_policies(),
+    )
+    return backups.build_payload(mgr.tunnel_id, tunnel.get("name", ""), config, apps,
+                                 policies, reason)
+
+
+async def store_backup(kind: str, reason: str, label: str = "") -> str:
+    """Write a backup into /data and trim the old ones. Never raises."""
+    try:
+        payload = await collect_backup(reason)
+        path = backups.write(payload, kind, label)
+        backups.prune(kind, settings.backup_keep)
+        return path.name
+    except Exception as exc:  # a failed backup must not block the action itself
+        logger.warning("could not store a %s backup: %s", kind, exc)
+        return ""
+
+
+async def backup_scheduler() -> None:
+    """Make an automatic backup whenever the newest one is old enough.
+    Checking rather than sleeping a full day keeps it correct across restarts."""
+    while True:
+        try:
+            if settings.auto_backup and settings.configured and active_tunnel_id():
+                newest = backups.newest_time("auto")
+                due = newest is None or (time.time() - newest) >= settings.auto_backup_hours * 3600
+                if due:
+                    name = await store_backup("auto", "automatic")
+                    if name:
+                        logger.info("automatic backup written: %s", name)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("automatic backup failed: %s", exc)
+        await asyncio.sleep(900)
 
 
 RESTORE_TTL = 3600  # an abandoned restore upload is worthless after an hour
@@ -43,7 +91,13 @@ def purge_restore_uploads() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     purge_restore_uploads()
+    scheduler = asyncio.create_task(backup_scheduler())
     yield
+    scheduler.cancel()
+    try:
+        await scheduler
+    except asyncio.CancelledError:
+        pass
     for stale in [*_stale_clients, _client]:
         if stale is not None:
             await stale.aclose()
@@ -273,6 +327,20 @@ async def settings_password(request: Request, current_password: str = Form(""),
     return response
 
 
+@app.post("/settings/backups")
+async def settings_backups(request: Request, auto_backup: str = Form(""),
+                           auto_backup_hours: str = Form("24"), backup_keep: str = Form("14"),
+                           backup_before_delete: str = Form("")):
+    try:
+        hours = max(1, min(int(auto_backup_hours), 24 * 30))
+        keep = max(1, min(int(backup_keep), 365))
+    except ValueError:
+        return redirect("/settings", err="Interval and retention must be numbers.")
+    settings.save(auto_backup=bool(auto_backup), auto_backup_hours=hours,
+                  backup_keep=keep, backup_before_delete=bool(backup_before_delete))
+    return redirect("/settings", ok="Backup settings saved.")
+
+
 @app.post("/settings/preferences")
 async def settings_preferences(request: Request, session_hours: str = Form("12"),
                                secure_cookie: str = Form(""), default_origin_host: str = Form("")):
@@ -330,6 +398,84 @@ def destructive_warnings(form, row=None) -> list[str]:
 def confirmation_page(request: Request, action: str, form, warnings: list[str]) -> HTMLResponse:
     fields = [(k, v) for k, v in form.multi_items() if k != "confirmed"]
     return render(request, "confirm.html", action=action, fields=fields, warnings=warnings)
+
+
+EXPORT_COLUMNS = ("Hostname", "Path", "Origin / service", "Access app", "Policies",
+                  "Session duration", "In App Launcher", "Tunnel route", "Access app present",
+                  "DNS type", "DNS target")
+
+
+def export_rows(rows) -> list[list[str]]:
+    table = []
+    for row in rows:
+        app = row.app or {}
+        table.append([
+            row.hostname,
+            row.path,
+            row.service,
+            row.app_name,
+            ", ".join(p.get("name", "") for p in row.policies),
+            app.get("session_duration", ""),
+            "yes" if app.get("app_launcher_visible") else "no" if app else "",
+            "yes" if row.has_route else "no",
+            "yes" if row.has_app else "no",
+            (row.dns or {}).get("type", ""),
+            (row.dns or {}).get("content", ""),
+        ])
+    return table
+
+
+@app.get("/export.csv")
+async def export_csv():
+    try:
+        rows, _ = await manager().load_overview()
+    except CloudflareError as exc:
+        return redirect("/", err=str(exc))
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, delimiter=";")  # opens straight into Excel on a Dutch locale
+    writer.writerow(EXPORT_COLUMNS)
+    writer.writerows(export_rows(rows))
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    return Response(
+        "\ufeff" + buffer.getvalue(),  # BOM so Excel reads the UTF-8 correctly
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="applications-{stamp}.csv"'},
+    )
+
+
+@app.get("/export.xlsx")
+async def export_xlsx():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    try:
+        rows, _ = await manager().load_overview()
+    except CloudflareError as exc:
+        return redirect("/", err=str(exc))
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Applications"
+    sheet.append(list(EXPORT_COLUMNS))
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    for line in export_rows(rows):
+        sheet.append(line)
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(EXPORT_COLUMNS))}{sheet.max_row}"
+    for index, header in enumerate(EXPORT_COLUMNS, start=1):
+        longest = max([len(header)] + [len(str(r[index - 1])) for r in export_rows(rows)] or [0])
+        sheet.column_dimensions[get_column_letter(index)].width = min(48, longest + 3)
+
+    stream = io.BytesIO()
+    book.save(stream)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    return Response(
+        stream.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="applications-{stamp}.xlsx"'},
+    )
 
 
 # ------------------------------------------------------ add application ---
@@ -519,6 +665,11 @@ async def delete_submit(request: Request):
 
     steps: list[str] = []
     try:
+        if settings.backup_before_delete:
+            name = await store_backup("predelete", f"before deleting {hostname}", hostname)
+            if name:
+                steps.append(f"backup stored ({name})")
+
         if form.get("del_app") and row.has_app:
             await client().delete_access_app(row.app["id"])
             services.invalidate_overview(mgr.tunnel_id)
@@ -551,32 +702,57 @@ async def dns_overwrite(request: Request, hostname: str = Form("")):
 # ---------------------------------------------------------------- backup ---
 @app.get("/backup", response_class=HTMLResponse)
 async def backup_page(request: Request):
-    return render(request, "backup.html", preview=None)
+    return render(request, "backup.html", preview=None, stored=backups.listing())
 
 
 @app.get("/backup/export")
 async def backup_export():
-    mgr = manager()
     try:
-        tunnel = await client().get_tunnel(mgr.tunnel_id)
-        payload = {
-            "format": "cfzerotrustcontrol/1",
-            "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "account_id": settings.account_id,
-            "tunnel": {"id": mgr.tunnel_id, "name": tunnel.get("name")},
-            "tunnel_config": await client().get_tunnel_config(mgr.tunnel_id),
-            "access_apps": await client().list_access_apps(),
-            "policies": await client().list_policies(),
-        }
+        payload = await collect_backup("manual download")
     except CloudflareError as exc:
         return redirect("/backup", err=str(exc))
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    body = json.dumps(payload, indent=2, ensure_ascii=False)
     return Response(
-        body,
+        json.dumps(payload, indent=2, ensure_ascii=False),
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="cfzt-backup-{stamp}.json"'},
     )
+
+
+@app.post("/backup/create")
+async def backup_create():
+    name = await store_backup("manual", "made by hand")
+    if not name:
+        return redirect("/backup", err="Could not reach Cloudflare, so nothing was stored.")
+    return redirect("/backup", ok=f"Backup stored as {name}.")
+
+
+@app.get("/backup/download")
+async def backup_download(request: Request):
+    name = request.query_params.get("name", "")
+    path = backups.resolve(name)
+    if path is None:
+        return redirect("/backup", err="That backup no longer exists.")
+    return Response(
+        path.read_text(encoding="utf-8"),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
+    )
+
+
+@app.post("/backup/remove")
+async def backup_remove(name: str = Form("")):
+    if not backups.remove(name):
+        return redirect("/backup", err="That backup no longer exists.")
+    return redirect("/backup", ok=f"Deleted {name}.")
+
+
+@app.post("/backup/stored", response_class=HTMLResponse)
+async def backup_preview_stored(request: Request, name: str = Form("")):
+    data = backups.read(name)
+    if data is None:
+        return redirect("/backup", err="That backup could not be read.")
+    return await render_restore_preview(request, data)
 
 
 @app.post("/backup/preview", response_class=HTMLResponse)
@@ -587,7 +763,12 @@ async def backup_preview(request: Request, backup: UploadFile | None = None):
         data = json.loads((await backup.read()).decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         return redirect("/backup", err=f"Could not read that file: {exc}")
-    if data.get("format") != "cfzerotrustcontrol/1":
+    return await render_restore_preview(request, data)
+
+
+async def render_restore_preview(request: Request, data: dict):
+    """Show what a restore would change, from an upload or a stored backup."""
+    if data.get("format") != backups.FORMAT:
         return redirect("/backup", err="That doesn't look like a CFZeroTrustControl backup.")
 
     try:
@@ -623,7 +804,7 @@ async def backup_preview(request: Request, backup: UploadFile | None = None):
         "routes_removed": sorted(h for h, _ in current_keys - backup_keys),
         "missing_apps": missing_apps,
     }
-    return render(request, "backup.html", preview=preview)
+    return render(request, "backup.html", preview=preview, stored=backups.listing())
 
 
 @app.post("/backup/apply")

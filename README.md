@@ -6,7 +6,9 @@ screens in the Cloudflare dashboard — tunnel route, Access application, policy
 - **Overview** — every tunnel hostname with its origin, Access app, policies and DNS status
 - **Add** — creates the tunnel route, the Access application and attaches your policies in one go
 - **Edit / delete** — change the origin or policies; delete route, app and DNS record selectively
-- **Backup** — export everything as JSON, restore with a diff screen first
+- **Export** — the overview as an Excel or CSV file
+- **Backup** — automatic every 24 hours, before every delete, or on demand; restore with a diff
+  screen first
 - **Self-configuring** — token, account, password and preferences are all set in the UI
 
 ---
@@ -123,6 +125,11 @@ the ones you tick.
 
 **If a step fails halfway**, the error names the steps that did succeed, so you know what to clean
 up.
+
+**Backups live in the `/data` volume.** An automatic one is written every 24 hours and another
+right before any application is deleted; both are on by default and can be switched off under
+Settings, along with the interval and how many of each kind to keep. They are listed on the Backup
+page with a Restore, Download and Delete button each, and restoring always shows the diff first.
 
 **The overview is cached for a minute** and thrown away as soon as you change anything, so
 moving between screens does not refetch everything. Changes you make in the Cloudflare dashboard
