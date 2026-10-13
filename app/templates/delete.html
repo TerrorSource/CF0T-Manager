@@ -21,12 +21,25 @@
           {% if row.has_app %}<span class="hint">{{ row.app_name }}</span>{% else %}<span class="hint">(doesn't exist)</span>{% endif %}
         </label>
       </div>
+      {% if dns_records %}
+      {% for record in dns_records %}
       <div class="check">
-        <input type="checkbox" id="del_dns" name="del_dns" value="1">
-        <label for="del_dns">DNS record
-          {% if row.dns %}<span class="hint mono">{{ row.dns.type }} → {{ row.dns.content }}</span>{% else %}<span class="hint">(no record found)</span>{% endif %}
+        <input type="checkbox" id="dns_{{ loop.index }}" name="del_dns_ids" value="{{ record.id }}"
+               {% if record.content.endswith('.cfargotunnel.com') %}checked{% endif %}>
+        <label for="dns_{{ loop.index }}">DNS record
+          <span class="hint mono">{{ record.type }} → {{ record.content }}</span>
+          {% if not record.content.endswith('.cfargotunnel.com') %}
+          <span class="badge warn">does not point at the tunnel</span>
+          {% endif %}
         </label>
       </div>
+      {% endfor %}
+      {% else %}
+      <div class="check">
+        <input type="checkbox" disabled>
+        <label>DNS record <span class="hint">(no record found)</span></label>
+      </div>
+      {% endif %}
 
       <div class="form-actions">
         <button class="btn danger" type="submit">Delete permanently</button>

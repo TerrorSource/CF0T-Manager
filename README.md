@@ -116,6 +116,11 @@ session.
 config first, changes one rule, and keeps the `http_status:404` catch-all last — it adds one if
 it's missing.
 
+**Removing protection always asks first.** Deleting the Access application from the edit screen,
+or saving an application with no policy attached, shows what the consequence is before anything
+happens. The delete screen lists every address record on the hostname separately, and removes only
+the ones you tick.
+
 **If a step fails halfway**, the error names the steps that did succeed, so you know what to clean
 up.
 

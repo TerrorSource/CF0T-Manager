@@ -263,7 +263,7 @@ def test_leftover_dns_is_listed_so_it_can_be_removed():
     page = tc.get("/").text
     assert "sonarr.makooy.nl" in page and "unused DNS" in page
 
-    r = tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_dns": "1"},
+    r = tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_dns_ids": "dns1"},
                 follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
     assert not [d for d in STATE["dns"] if d["name"] == "sonarr.makooy.nl"]
@@ -361,11 +361,88 @@ def test_restore_keeps_every_setting_in_the_backup():
     assert [p["id"] for p in restored["policies"]] == ["pol1"]
 
 
+def test_deleting_an_app_asks_first():
+    reset_state()
+    login()
+    data = {
+        "original_hostname": "sonarr.makooy.nl", "original_path": "",
+        "hostname": "sonarr.makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "8989",
+        "policies": ["pol1", "pol2"], "noTLSVerify": "1",
+    }  # note: no create_app, so the Access app would be deleted
+    r = tc.post("/edit", data=data)
+    assert r.status_code == 200 and "Are you sure?" in r.text
+    assert "without any authentication" in r.text
+    # the whole submission is carried through, including multi-value fields
+    assert 'name="policies" value="pol1"' in r.text
+    assert 'name="policies" value="pol2"' in r.text
+    assert 'name="noTLSVerify" value="1"' in r.text
+    assert [a for a in STATE["apps"] if a["id"] == "app1"], "app still there"
+
+    r = tc.post("/edit", data={**data, "confirmed": "1"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+    assert not [a for a in STATE["apps"] if a["id"] == "app1"], "deleted after confirming"
+
+
+def test_removing_every_policy_asks_first():
+    reset_state()
+    login()
+    data = {
+        "original_hostname": "sonarr.makooy.nl", "original_path": "",
+        "hostname": "sonarr.makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "8989",
+        "create_app": "1", "app_name": "Sonarr", "session_duration": "24h",
+    }  # no policies selected
+    r = tc.post("/edit", data=data)
+    assert r.status_code == 200 and "Are you sure?" in r.text
+    assert "denies everyone" in r.text
+    app = [a for a in STATE["apps"] if a["id"] == "app1"][0]
+    assert [p["id"] for p in app["policies"]] == ["pol1"], "policies untouched"
+
+    r = tc.post("/edit", data={**data, "confirmed": "1"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"]
+    app = [a for a in STATE["apps"] if a["id"] == "app1"][0]
+    assert app["policies"] == []
+
+
+def test_only_the_ticked_dns_records_are_deleted():
+    reset_state()
+    # two address records on the same hostname
+    STATE["dns"].append({"id": "dns-extra", "type": "A", "name": "sonarr.makooy.nl",
+                         "content": "192.168.1.77", "proxied": False})
+    login()
+    page = tc.get("/delete?h=sonarr.makooy.nl&p=").text
+    assert "192.168.1.77" in page and "cfargotunnel.com" in page, "both records are shown"
+    assert "does not point at the tunnel" in page
+
+    r = tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "",
+                                 "del_dns_ids": "dns1"}, follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    left = [d["id"] for d in STATE["dns"] if d["name"] == "sonarr.makooy.nl"]
+    assert left == ["dns-extra"], "the record that was not ticked survives"
+
+
+def test_abandoned_restore_uploads_are_cleaned_up():
+    import time as _time
+    from app.config import settings as _settings
+    stale = _settings.data_dir / "restore-stale.json"
+    stale.write_text("{}", encoding="utf-8")
+    old = _time.time() - main.RESTORE_TTL - 60
+    os.utime(stale, (old, old))
+    fresh = _settings.data_dir / "restore-fresh.json"
+    fresh.write_text("{}", encoding="utf-8")
+
+    main.purge_restore_uploads()
+    assert not stale.exists(), "an hour-old upload is removed"
+    assert fresh.exists(), "a recent one is kept"
+    fresh.unlink()
+
+
 def test_delete_everything():
     reset_state()
     login()
     r = tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "",
-                                 "del_route": "1", "del_app": "1", "del_dns": "1"},
+                                 "del_route": "1", "del_app": "1", "del_dns_ids": "dns1"},
                 follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
     assert cf.find_rule(STATE["config"]["ingress"], "sonarr.makooy.nl") is None

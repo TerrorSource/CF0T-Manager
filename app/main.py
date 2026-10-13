@@ -28,8 +28,21 @@ _client_key: tuple[str, str] | None = None
 _stale_clients: list[CloudflareClient] = []
 
 
+RESTORE_TTL = 3600  # an abandoned restore upload is worthless after an hour
+
+
+def purge_restore_uploads() -> None:
+    for path in settings.data_dir.glob("restore-*.json"):
+        try:
+            if time.time() - path.stat().st_mtime > RESTORE_TTL:
+                path.unlink()
+        except OSError:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    purge_restore_uploads()
     yield
     for stale in [*_stale_clients, _client]:
         if stale is not None:
@@ -287,6 +300,38 @@ async def dashboard(request: Request):
     return render(request, "index.html", rows=rows, meta=meta, tunnel=tunnel)
 
 
+def destructive_warnings(form, row=None) -> list[str]:
+    """Changes that quietly remove protection, spelled out before they happen."""
+    warnings: list[str] = []
+    keeps_app = bool(form.get("create_app"))
+    policies = form_list(form, "policies")
+
+    if row is not None and row.has_app and not keeps_app:
+        warnings.append(
+            f"The Access application \u201c{row.app_name}\u201d will be deleted. "
+            f"{row.hostname} stays reachable through the tunnel, but without any "
+            f"authentication in front of it."
+        )
+    if keeps_app and not policies:
+        had = len(row.policies) if row is not None else 0
+        if had:
+            warnings.append(
+                f"All {had} policy/policies will be removed from this application. "
+                f"Cloudflare Access denies everyone while an application has no policy."
+            )
+        else:
+            warnings.append(
+                "This application will be created without a policy. Cloudflare Access "
+                "denies everyone until you attach one."
+            )
+    return warnings
+
+
+def confirmation_page(request: Request, action: str, form, warnings: list[str]) -> HTMLResponse:
+    fields = [(k, v) for k, v in form.multi_items() if k != "confirmed"]
+    return render(request, "confirm.html", action=action, fields=fields, warnings=warnings)
+
+
 # ------------------------------------------------------ add application ---
 @app.get("/new", response_class=HTMLResponse)
 async def new_form(request: Request):
@@ -308,6 +353,10 @@ async def new_submit(request: Request):
         hostname, service, path, origin = _parse_route_form(form)
     except ValueError as exc:
         return redirect("/new", err=str(exc))
+
+    warnings = destructive_warnings(form)
+    if warnings and not form.get("confirmed"):
+        return confirmation_page(request, "/new", form, warnings)
 
     steps: list[str] = []
     try:
@@ -388,6 +437,10 @@ async def edit_submit(request: Request):
     if row is None:
         return redirect("/", err=f"{original_host} not found.")
 
+    warnings = destructive_warnings(form, row)
+    if warnings and not form.get("confirmed"):
+        return confirmation_page(request, "/edit", form, warnings)
+
     steps: list[str] = []
     try:
         if row.has_route:
@@ -439,13 +492,16 @@ async def edit_submit(request: Request):
 async def delete_form(request: Request):
     hostname = request.query_params.get("h", "")
     path = services.normalize_path(request.query_params.get("p", ""))
+    mgr = manager()
     try:
-        row = await manager().get_row(hostname, path)
-    except CloudflareError as exc:
-        return redirect("/", err=str(exc))
-    if row is None:
-        return redirect("/", err=f"{hostname} not found.")
-    return render(request, "delete.html", row=row)
+        row = await mgr.get_row(hostname, path)
+        if row is None:
+            return redirect("/", err=f"{hostname} not found.")
+        zones = await client().list_zones()
+        dns_records = await mgr.dns_records_for(row.hostname, zones)
+    except CloudflareError:
+        dns_records = []
+    return render(request, "delete.html", row=row, dns_records=dns_records)
 
 
 @app.post("/delete")
@@ -470,9 +526,10 @@ async def delete_submit(request: Request):
         if form.get("del_route") and row.has_route:
             await mgr.delete_route(hostname, path)
             steps.append("tunnel route deleted")
-        if form.get("del_dns"):
+        record_ids = form_list(form, "del_dns_ids")
+        if record_ids:
             zones = await client().list_zones()
-            steps.append(await mgr.delete_dns(hostname, zones))
+            steps.append(await mgr.delete_dns(hostname, zones, record_ids))
     except CloudflareError as exc:
         done = ", ".join(steps) or "nothing"
         return redirect("/", err=f"{exc} — already done: {done}.")
@@ -551,6 +608,7 @@ async def backup_preview(request: Request, backup: UploadFile | None = None):
         and (a.get("type") or "") == "self_hosted"
     ]
 
+    purge_restore_uploads()
     token = secrets.token_urlsafe(16)
     (settings.data_dir / f"restore-{token}.json").write_text(
         json.dumps(data), encoding="utf-8"

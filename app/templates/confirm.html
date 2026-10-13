@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Are you sure?</h1>
+<p class="sub">Nothing has been changed yet.</p>
+
+<div class="panel">
+  <div class="panel-head">What this will do</div>
+  <div class="panel-body">
+    <ul class="plain" style="font-size:15px; color:var(--text)">
+      {% for warning in warnings %}<li style="margin-bottom:10px">{{ warning }}</li>{% endfor %}
+    </ul>
+
+    <form method="post" action="{{ action }}">
+      {% for key, value in fields %}
+      <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endfor %}
+      <input type="hidden" name="confirmed" value="1">
+      <div class="form-actions">
+        <button class="btn danger" type="submit">Yes, apply it</button>
+        <a class="btn" href="/">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

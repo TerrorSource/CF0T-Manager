@@ -405,15 +405,26 @@ class ZeroTrustManager:
         invalidate_overview(self.tunnel_id)
         return "DNS CNAME created."
 
-    async def delete_dns(self, hostname: str, zones: list[dict]) -> str:
+    async def dns_records_for(self, hostname: str, zones: list[dict]) -> list[dict]:
+        """Every address record on this hostname, so the delete screen can show
+        all of them instead of just the first."""
+        zone = zone_for_hostname(hostname, zones)
+        if not zone:
+            return []
+        records = await self.cf.list_dns_records(zone["id"], name=hostname)
+        return [r for r in records if r.get("type") in {"CNAME", "A", "AAAA"}]
+
+    async def delete_dns(self, hostname: str, zones: list[dict],
+                         record_ids: list[str]) -> str:
+        """Delete exactly the records the user ticked, never more."""
         zone = zone_for_hostname(hostname, zones)
         if not zone:
             return "No zone found, skipped DNS."
-        records = await self.cf.list_dns_records(zone["id"], name=hostname)
-        removed = 0
-        for record in records:
-            if record.get("type") in {"CNAME", "A", "AAAA"}:
-                await self.cf.delete_dns_record(zone["id"], record["id"])
-                removed += 1
-        invalidate_overview(self.tunnel_id)
-        return f"Deleted {removed} DNS record(s)." if removed else "No DNS record found."
+        existing = {r["id"]: r for r in await self.dns_records_for(hostname, zones)}
+        wanted = [rid for rid in record_ids if rid in existing]
+        for rid in wanted:
+            await self.cf.delete_dns_record(zone["id"], rid)
+        if wanted:
+            invalidate_overview(self.tunnel_id)
+            return f"Deleted {len(wanted)} DNS record(s)."
+        return "No DNS record deleted."
