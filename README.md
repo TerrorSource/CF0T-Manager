@@ -1,23 +1,56 @@
 # CF0T-Manager
 
-A small web UI to manage Cloudflare Zero Trust. Adding an app normally means three separate
-screens in the Cloudflare dashboard — tunnel route, Access application, policy. Here it's one form.
+A small web page, running in Docker on your NAS, that manages your Cloudflare
+Zero Trust setup. One form adds a hostname: tunnel route, Access application and
+policy in a single submit. Nothing that already exists is overwritten without
+asking first.
 
-- **Overview** — every tunnel hostname with its origin, Access app, policies and DNS status
-- **Add** — creates the tunnel route, the Access application and attaches your policies in one go
-- **Edit / delete** — change the origin or policies; delete route, app and DNS record selectively
-- **Export** — the overview as an Excel or CSV file
-- **Backup** — automatic every 24 hours, before every delete, or on demand; restore with a diff
-  screen first
-- **Self-configuring** — token, account, password and preferences are all set in the UI
+## Why
 
----
+Adding one service to Cloudflare Zero Trust means three screens in the dashboard:
+a published application route on the tunnel, an Access application for the
+hostname, and a policy attached to it. Miss one and you either get a 502, a 1016,
+or a hostname anyone on the internet can reach. This puts the three together.
 
-## Setup
+## What adding an application does
 
-### Step 1 — Create a Cloudflare API token
+For each hostname the tool:
 
-Dashboard → **My Profile → API Tokens → Create Token → Create Custom Token**
+1. adds the **tunnel route**, hostname to origin, keeping the `http_status:404`
+   catch-all last where cloudflared expects it,
+2. creates the **Access application** and attaches the policies you picked, in
+   the order you picked them,
+3. creates the **DNS CNAME** to `<tunnel>.cfargotunnel.com`, proxied.
+
+Step 3 is a checkbox: switch it off if you already have a wildcard CNAME. If a
+record is there already and points somewhere else, you get a screen with the old
+and the new value and decide yourself.
+
+## The page
+
+Open `http://<your-nas-ip>:8099`. Four tabs:
+
+- **Applications** — every hostname on the tunnel, with its origin, Access app,
+  policies and DNS status. Search filters as you type. A record still pointing at
+  the tunnel without a route or application behind it is flagged *unused DNS*, so
+  leftovers from a rename do not go unnoticed. Exports to Excel or CSV.
+- **New application** — the form above. Subdomain plus a domain dropdown, origin
+  as protocol/host/port, and the advanced origin options cloudflared supports:
+  `noTLSVerify` for a self-signed origin like Proxmox, HTTP/2, host header,
+  connect timeout.
+- **Backup** — download the whole configuration, or keep copies in `/data`.
+  Restoring always shows the difference first.
+- **Settings** — API token, which tunnel to manage, your password, session
+  length, and the backup schedule.
+
+Deleting is its own screen: tick what should go — route, application, DNS record
+— and nothing else is touched.
+
+## Getting it working
+
+### 1. A Cloudflare API token
+
+Dashboard → *My Profile* → *API Tokens* → *Create Token* → *Create Custom Token*:
 
 | Scope | Permission | Level |
 |---|---|---|
@@ -26,46 +59,29 @@ Dashboard → **My Profile → API Tokens → Create Token → Create Custom Tok
 | Zone | DNS | Edit *(optional, for DNS records)* |
 | Zone | Zone | Read *(optional, for the domain dropdown)* |
 
-Copy the token immediately — it is shown only once. You also need your **Account ID**, in the
-right-hand column of the Cloudflare dashboard.
+Copy it straight away, it is shown once. You also need your **Account ID**, in
+the right-hand column of the Cloudflare dashboard.
 
-> **Using a passkey on your account?** No problem. A passkey protects dashboard login; an API
-> token is a separate key and is not subject to 2FA. Cloudflare may ask for your passkey once
-> while creating the token.
+A passkey on your account changes nothing here: a passkey protects dashboard
+login, an API token is a separate key. Cloudflare may ask for the passkey once
+while you create the token.
 
-### Step 2 — Start the container
+### 2. One folder on your NAS
 
-```bash
-docker compose up -d --build
+For the configuration and the backups, for example:
+
+```
+/share/CACHEDEV1_DATA/Docker/cf0t-manager/data
 ```
 
-No configuration file needed.
+Make it writable by the user the container runs as:
+`chown -R 1000:1000 /share/CACHEDEV1_DATA/Docker/cf0t-manager/data`. If it is
+not, the page says so when you save instead of quietly forgetting your settings.
 
-### Step 3 — Finish setup in the browser
+### 3. Start the container
 
-Open **http://localhost:8099**. The first-run wizard asks for a password, your API token and your
-account ID, verifies them against Cloudflare, and logs you in. If you have a single tunnel it's
-selected for you.
-
-That's it. **New application** now creates a route, an Access app and its policies in one submit.
-
-Everything stays changeable under **Settings**: replace the token, switch tunnels, change your
-password, adjust session length and the default origin host.
-
----
-
-## Running it on a NAS with Portainer
-
-First push this repo to GitHub. The included workflow builds a multi-arch image (amd64 + arm64)
-and publishes it to `ghcr.io/<you>/<repo>` on every push to `main`.
-
-```bash
-git remote add origin git@github.com:TerrorSource/CF0T-Manager.git
-git push -u origin main
-```
-
-In Portainer: *Stacks* → *Add stack* → *Web editor*, paste `docker-compose.ghcr.yml` from this
-repo. The short version, with everything you need to change:
+In Portainer: *Stacks* → *Add stack* → *Web editor*, paste `docker-compose.yml`
+from this repo. The short version, with everything you need to change:
 
 ```yaml
 version: "3"
@@ -78,102 +94,99 @@ services:
     restart: unless-stopped
     network_mode: bridge
     environment:
-      - TZ=Europe/Amsterdam               # otherwise backup times are shown in UTC
+      - TZ=Europe/Amsterdam               # otherwise times are shown in UTC
     ports:
       - 8099:8080
     volumes:
       - /share/CACHEDEV1_DATA/Docker/cf0t-manager/data:/data
 ```
 
-- No login or Cloudflare variables here: the page asks for a password, your API token and your
-  account ID the first time you open it, and keeps them in `/data`.
-- The folder you mount on `/data` must be **writable by uid 1000**, the user the container runs
-  as. On the NAS: `chown -R 1000:1000 /share/CACHEDEV1_DATA/Docker/cf0t-manager/data`. If it is
-  not, the page says so when you try to save instead of quietly forgetting your settings.
-- `TZ` only affects how times are displayed, for instance in the backup list.
-- Prefer not to deal with folder permissions at all? Leave the `volumes:` block out and use the
-  named volume from `docker-compose.ghcr.yml` instead. Backups then live inside the volume rather
-  than in a folder you can browse.
+- No token, no password, no account ID here: the page asks for all three the
+  first time you open it and keeps them in `/data`. Put them in the stack as
+  `CF_API_TOKEN`, `CF_ACCOUNT_ID` and `CF0T_PASSWORD` if you would rather keep
+  secrets in Portainer; set that way they become read-only in the page.
+- The folder path — the one from step 2.
+- `TZ` only affects displayed times, for instance in the backup list.
 
-Deploy, open `http://<your-nas-ip>:8099` and run through the wizard.
+The image is published to GitHub Container Registry, and packages there are
+**private** by default. Either set the package to public under *Package
+settings* → *Change visibility*, or run `docker login ghcr.io` on the NAS with a
+token that has `read:packages`.
 
-> GHCR packages are **private** by default. Either make the package public under
-> *Package settings → Change visibility*, or run `docker login ghcr.io` on the NAS with a
-> personal access token that has the `read:packages` scope.
+### 4. Finish setup in the browser
 
-**Prefer to build on the NAS instead?** Use **Add stack → Repository** with your repo URL and
-`docker-compose.yml` as the compose path.
+Open `http://<your-nas-ip>:8099`. The first-run wizard asks for a password, your
+API token and your account ID, checks them against Cloudflare before storing
+anything, and logs you in. One tunnel on the account is selected for you.
 
----
+## Backups
 
-## Optional environment variables
+A backup holds every ingress rule on the tunnel, all Access applications and the
+reusable policies. Three kinds are kept in `/data/backups`:
 
-Everything can be set in the UI, so none of these are required. Anything you do set wins over the
-stored config and shows up as read-only on the Settings page — handy if you'd rather keep secrets
-in your orchestrator.
+- **automatic** — every 24 hours. The schedule looks at how old the newest one
+  is rather than sleeping a full day, so a restart never skips or doubles a run.
+- **before a delete** — written before an application is removed. If that backup
+  fails, the delete stops and asks whether to go ahead without one.
+- **by hand** — the button on the Backup page.
 
-Renamed from `CFZT_*` to `CF0T_*`; the old spelling still works, so an existing deployment keeps
-running.
+Both automatic kinds are on by default; interval, retention and the switches are
+under Settings. Restoring puts routes back and recreates missing applications
+with everything the backup holds, after showing you what would change. DNS is
+never part of a restore.
 
-| Variable | Description |
-|---|---|
-| `CF_API_TOKEN` | Cloudflare API token |
-| `CF_ACCOUNT_ID` | Cloudflare account ID |
-| `CF_TUNNEL_ID` | Pin to one tunnel instead of choosing in the UI |
-| `CF0T_PASSWORD` | Fixed login password instead of the one managed in the UI |
-| `CF0T_SECRET_KEY` | Session cookie key; generated in `/data/secret.key` if unset |
-| `CF0T_DISABLE_LOGIN` | `1` runs without any login — only on a trusted network |
-| `CF0T_PORT` | Host port (default 8099) |
-| `TZ` | Timezone used for displayed times, e.g. `Europe/Amsterdam` |
-| `CF0T_IMAGE` | Which image to pull (GHCR compose file only) |
+## When something goes wrong
 
----
+- **Error 1016** — the hostname has no DNS record pointing at the tunnel. Open
+  *Edit* for it, tick the CNAME checkbox and save.
+- **A hostname that worked is suddenly NXDOMAIN** — the record is back but your
+  resolver cached the old answer. Cloudflare keeps negative answers for 30
+  minutes; on a Pi-hole, *Settings* → *System* → *Restart DNS resolver*.
+- **502 on a self-signed origin** — tick *Don't verify the origin's TLS
+  certificate* under the advanced origin options.
+- **No tunnels, or no domain dropdown** — the token is missing
+  *Cloudflare Tunnel: Edit* or *Zone: Read*.
+- **Settings do not survive a restart** — the mounted folder is not writable by
+  uid 1000.
 
-## Good to know
+## Safety
 
-**Put the tool behind its own Zero Trust policy.** Add an application pointing at
-`http://<nas-ip>:8099`, attach your usual policy, and turn on *Only send the session cookie over
-https* under Settings.
+The page can delete routes, applications and DNS records, so give it a real
+password and **do not open port 8099 to the internet**. Better: add it to
+Cloudflare Zero Trust as an application of its own, behind your usual policy,
+and switch on *Only send the session cookie over https* under Settings.
 
-**Where your data lives.** The `/data` volume holds `config.json` (API token, account ID, selected
-tunnel, preferences and the scrypt hash of your password) and `secret.key`. The token is stored in
-plain text with `0600` permissions, the same as it would be in a `.env` — treat the volume as a
-secret. Your password is never stored in a recoverable form, and changing it signs out every other
-session.
+Your API token sits in `config.json` in the mounted folder, readable only by the
+container user, the same as it would be in a `.env`. Treat that folder as a
+secret. Your password is stored as an scrypt hash and never in a recoverable
+form; changing it signs out every other session. Nothing is in the image or in
+this repository.
 
-**Tunnel routes are replaced as a whole** by the Cloudflare API. The tool always reads the current
-config first, changes one rule, and keeps the `http_status:404` catch-all last — it adds one if
-it's missing.
+## For developers
 
-**Removing protection always asks first.** Deleting the Access application from the edit screen,
-or saving an application with no policy attached, shows what the consequence is before anything
-happens. The delete screen lists every address record on the hostname separately, and removes only
-the ones you tick.
+Python + FastAPI with server-rendered Jinja templates, talking to the Cloudflare
+`client/v4` API over httpx. Three things that each cost an evening:
 
-**If a step fails halfway**, the error names the steps that did succeed, so you know what to clean
-up.
+- Updating an Access application is a **PUT that replaces the whole object**, and
+  there is no PATCH. Send only the fields you care about and `allowed_idps`,
+  `auto_redirect_to_identity` and the custom pages silently fall back to their
+  defaults, which turns a Google-only application into one that accepts every
+  identity provider. Always read the application first and change only your own
+  fields.
+- The same goes for the tunnel configuration: the PUT replaces the entire ingress
+  list, and the catch-all entry has to stay last or cloudflared matches nothing.
+- Applications take **reusable policies** by `{id, precedence}`; reusable and
+  inline policies are mutually exclusive in one request.
 
-**Backups live in the `/data` volume.** An automatic one is written every 24 hours and another
-right before any application is deleted; both are on by default and can be switched off under
-Settings, along with the interval and how many of each kind to keep. They are listed on the Backup
-page with a Restore, Download and Delete button each, and restoring always shows the diff first.
+The overview costs four or five calls, so they run in parallel and the result is
+cached for a minute, dropped on every write. Filtering is done in the browser.
 
-**The overview is cached for a minute** and thrown away as soon as you change anything, so
-moving between screens does not refetch everything. Changes you make in the Cloudflare dashboard
-itself can take up to a minute to show up — the Refresh button fetches immediately.
+## Disclaimer
 
-**An existing DNS record is never changed behind your back.** If the hostname already has an
-A, AAAA or CNAME record pointing elsewhere, you get a confirmation screen showing the old and the
-new value, and nothing happens until you say so.
+The tool changes live Cloudflare configuration, including deleting routes,
+applications and DNS records. It asks before anything destructive and backs up
+first, but using it is your own risk. Provided as-is, no warranty.
 
----
+## License
 
-## Development
-
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
-.venv/bin/python -m pytest tests/ -q
-```
-
-The tests run against a mocked Cloudflare API and cover the first-run wizard, login and password
-changes, creating, editing and deleting applications, DNS conflicts, and the backup roundtrip.
+[MIT](LICENSE).
