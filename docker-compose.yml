@@ -12,9 +12,11 @@ services:
     image: ${CF0T_IMAGE:-cf0t-manager:local}
     container_name: cf0t-manager
     restart: unless-stopped
+    init: true
     ports:
       - "${CF0T_PORT:-8099}:8080"
     environment:
+      TZ: ${TZ:-Europe/Amsterdam}
       CF_API_TOKEN: ${CF_API_TOKEN:-}
       CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
       CF_TUNNEL_ID: ${CF_TUNNEL_ID:-}

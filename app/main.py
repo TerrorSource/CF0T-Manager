@@ -93,6 +93,10 @@ def purge_restore_uploads() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    problem = settings.check_data_writable()
+    if problem:
+        logger.error("the /data volume is not writable (%s) - settings and backups "
+                     "cannot be stored. Give the mounted folder to uid 1000.", problem)
     purge_restore_uploads()
     scheduler = asyncio.create_task(backup_scheduler())
     yield
@@ -152,6 +156,21 @@ async def probe_credentials(token: str, account_id: str) -> tuple[str, list[dict
 
 def manager() -> ZeroTrustManager:
     return ZeroTrustManager(client(), active_tunnel_id())
+
+
+DATA_UNWRITABLE = ("Could not write to the /data volume: {error}. "
+                   "Nothing was saved. Check that the mounted folder is writable "
+                   "by the user the container runs as (uid 1000).")
+
+
+def save_settings(**values) -> str:
+    """Store settings, returning an error message instead of failing silently."""
+    try:
+        settings.save(**values)
+        return ""
+    except OSError as exc:
+        logger.error("could not persist settings: %s", exc)
+        return DATA_UNWRITABLE.format(error=exc)
 
 
 def redirect(path: str, ok: str = "", err: str = "") -> RedirectResponse:
@@ -255,11 +274,16 @@ async def welcome_submit(request: Request):
                       need_cloudflare=need_cloudflare, form=kept,
                       err_msg=f"Cloudflare rejected these credentials: {error}")
 
-    settings.save(api_token=api_token, account_id=account_id)
-    if need_password:
-        settings.set_password_hash(auth.hash_password(form.get("password")))
-    if len(tunnels) == 1:
-        set_active_tunnel_id(tunnels[0]["id"])
+    try:
+        settings.save(api_token=api_token, account_id=account_id)
+        if need_password:
+            settings.set_password_hash(auth.hash_password(form.get("password")))
+        if len(tunnels) == 1:
+            set_active_tunnel_id(tunnels[0]["id"])
+    except OSError as exc:
+        return render(request, "welcome.html", need_password=need_password,
+                      need_cloudflare=need_cloudflare, form=kept,
+                      err_msg=DATA_UNWRITABLE.format(error=exc))
     reset_client()
 
     response = RedirectResponse("/", status_code=303)
@@ -297,9 +321,11 @@ async def settings_cloudflare(request: Request, api_token: str = Form(""),
         return redirect("/settings", err=f"Cloudflare rejected these credentials: {error}")
 
     changed_account = account_id != settings.account_id
-    settings.save(api_token=api_token, account_id=account_id)
+    error = save_settings(api_token=api_token, account_id=account_id)
+    if error:
+        return redirect("/settings", err=error)
     if changed_account or not any(t["id"] == active_tunnel_id() for t in tunnels):
-        settings.save(tunnel_id=tunnels[0]["id"] if len(tunnels) == 1 else "")
+        save_settings(tunnel_id=tunnels[0]["id"] if len(tunnels) == 1 else "")
     reset_client()
     return redirect("/settings", ok="Cloudflare credentials saved.")
 
@@ -308,7 +334,9 @@ async def settings_cloudflare(request: Request, api_token: str = Form(""),
 async def settings_tunnel(request: Request, tunnel_id: str = Form("")):
     if not tunnel_id:
         return redirect("/settings", err="No tunnel selected.")
-    set_active_tunnel_id(tunnel_id)
+    error = save_settings(tunnel_id=tunnel_id)
+    if error:
+        return redirect("/settings", err=error)
     forget_cached_data()
     return redirect("/", ok="Tunnel saved.")
 
@@ -324,7 +352,10 @@ async def settings_password(request: Request, current_password: str = Form(""),
     if problem:
         return redirect("/settings", err=problem)
 
-    settings.set_password_hash(auth.hash_password(password))
+    try:
+        settings.set_password_hash(auth.hash_password(password))
+    except OSError as exc:
+        return redirect("/settings", err=DATA_UNWRITABLE.format(error=exc))
     response = redirect("/settings", ok="Password changed. Other sessions have been signed out.")
     auth.set_session_cookie(response, auth.make_token())
     return response
@@ -339,9 +370,10 @@ async def settings_backups(request: Request, auto_backup: str = Form(""),
         keep = max(1, min(int(backup_keep), 365))
     except ValueError:
         return redirect("/settings", err="Interval and retention must be numbers.")
-    settings.save(auto_backup=bool(auto_backup), auto_backup_hours=hours,
-                  backup_keep=keep, backup_before_delete=bool(backup_before_delete))
-    return redirect("/settings", ok="Backup settings saved.")
+    error = save_settings(auto_backup=bool(auto_backup), auto_backup_hours=hours,
+                          backup_keep=keep, backup_before_delete=bool(backup_before_delete))
+    return redirect("/settings", err=error) if error else \
+        redirect("/settings", ok="Backup settings saved.")
 
 
 @app.post("/settings/preferences")
@@ -351,9 +383,10 @@ async def settings_preferences(request: Request, session_hours: str = Form("12")
         hours = max(1, min(int(session_hours), 24 * 365))
     except ValueError:
         return redirect("/settings", err="Session duration must be a number of hours.")
-    settings.save(session_hours=hours, secure_cookie=bool(secure_cookie),
-                  default_origin_host=default_origin_host.strip() or "192.168.1.9")
-    return redirect("/settings", ok="Preferences saved.")
+    error = save_settings(session_hours=hours, secure_cookie=bool(secure_cookie),
+                          default_origin_host=default_origin_host.strip() or "192.168.1.9")
+    return redirect("/settings", err=error) if error else \
+        redirect("/settings", ok="Preferences saved.")
 
 
 # ------------------------------------------------------------- dashboard ---

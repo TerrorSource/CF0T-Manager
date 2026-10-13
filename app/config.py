@@ -82,16 +82,15 @@ class Store:
             self._write()
 
     def _write(self) -> None:
+        """Raises OSError when /data is not writable - swallowing that would
+        leave settings looking saved while they are gone after a restart."""
         tmp = self._path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
         try:
-            tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
-            try:
-                tmp.chmod(0o600)  # holds the API token
-            except OSError:
-                pass
-            tmp.replace(self._path)
+            tmp.chmod(0o600)  # holds the API token
         except OSError:
             pass
+        tmp.replace(self._path)
 
 
 class Settings:
@@ -216,6 +215,16 @@ class Settings:
         # still invalidate the sessions issued in between.
         self.store.update(password_hash=password_hash, session_epoch=self.session_epoch + 1)
 
+    def check_data_writable(self) -> str:
+        """Empty when /data can be written to, otherwise the reason it cannot."""
+        probe = self.data_dir / ".write-test"
+        try:
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            return ""
+        except OSError as exc:
+            return str(exc)
+
     # ---------- helpers ----------
     def _persisted_secret(self) -> str:
         path = self.data_dir / "secret.key"
@@ -244,7 +253,10 @@ class Settings:
         except (OSError, ValueError):
             return
         if data.get("tunnel_id"):
-            self.store.update(tunnel_id=data["tunnel_id"])
+            try:
+                self.store.update(tunnel_id=data["tunnel_id"])
+            except OSError:
+                pass  # migrating an old setting is never worth failing over
 
 
 settings = Settings()

@@ -60,19 +60,42 @@ First push this repo to GitHub. The included workflow builds a multi-arch image 
 and publishes it to `ghcr.io/<you>/<repo>` on every push to `main`.
 
 ```bash
-git remote add origin git@github.com:<you>/<repo>.git
+git remote add origin git@github.com:TerrorSource/CF0T-Manager.git
 git push -u origin main
 ```
 
-Then in Portainer, **Stacks → Add stack → Web editor**, paste
-[`docker-compose.ghcr.yml`](docker-compose.ghcr.yml), and set one variable:
+In Portainer: *Stacks* → *Add stack* → *Web editor*, paste `docker-compose.ghcr.yml` from this
+repo. The short version, with everything you need to change:
 
-| Variable | Value |
-|---|---|
-| `CF0T_IMAGE` | `ghcr.io/<you>/<repo>:latest` |
+```yaml
+version: "3"
 
-Deploy, open the UI on port 8099, and run through the wizard. Nothing is built on the NAS and no
-secrets live in the stack definition.
+services:
+  cf0t-manager:
+    container_name: cf0t-manager
+    image: ghcr.io/terrorsource/cf0t-manager:latest
+    init: true
+    restart: unless-stopped
+    network_mode: bridge
+    environment:
+      - TZ=Europe/Amsterdam               # otherwise backup times are shown in UTC
+    ports:
+      - 8099:8080
+    volumes:
+      - /share/CACHEDEV1_DATA/Docker/cf0t-manager/data:/data
+```
+
+- No login or Cloudflare variables here: the page asks for a password, your API token and your
+  account ID the first time you open it, and keeps them in `/data`.
+- The folder you mount on `/data` must be **writable by uid 1000**, the user the container runs
+  as. On the NAS: `chown -R 1000:1000 /share/CACHEDEV1_DATA/Docker/cf0t-manager/data`. If it is
+  not, the page says so when you try to save instead of quietly forgetting your settings.
+- `TZ` only affects how times are displayed, for instance in the backup list.
+- Prefer not to deal with folder permissions at all? Leave the `volumes:` block out and use the
+  named volume from `docker-compose.ghcr.yml` instead. Backups then live inside the volume rather
+  than in a folder you can browse.
+
+Deploy, open `http://<your-nas-ip>:8099` and run through the wizard.
 
 > GHCR packages are **private** by default. Either make the package public under
 > *Package settings → Change visibility*, or run `docker login ghcr.io` on the NAS with a
@@ -101,6 +124,7 @@ running.
 | `CF0T_SECRET_KEY` | Session cookie key; generated in `/data/secret.key` if unset |
 | `CF0T_DISABLE_LOGIN` | `1` runs without any login — only on a trusted network |
 | `CF0T_PORT` | Host port (default 8099) |
+| `TZ` | Timezone used for displayed times, e.g. `Europe/Amsterdam` |
 | `CF0T_IMAGE` | Which image to pull (GHCR compose file only) |
 
 ---

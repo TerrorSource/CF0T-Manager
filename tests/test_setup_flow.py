@@ -136,6 +136,24 @@ def test_preferences_round_trip(blank_install):
     assert "10.0.0.5" in blank_install.get("/new").text, "used as the form default"
 
 
+def test_a_read_only_data_volume_is_reported(blank_install, monkeypatch):
+    """On a NAS the mounted folder is often owned by root. Settings that cannot
+    be written must say so instead of looking saved and vanishing on restart."""
+    blank_install.post("/welcome", data={
+        "password": "longenough1", "password_confirm": "longenough1",
+        "api_token": "fake-token", "account_id": "acct123"}, follow_redirects=False)
+
+    def read_only(**values):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(settings, "save", read_only)
+    r = blank_install.post("/settings/preferences", data={
+        "session_hours": "48", "default_origin_host": "10.0.0.5"}, follow_redirects=False)
+    assert "err=" in r.headers["location"]
+    assert "Read-only" in r.headers["location"]
+    assert "Nothing+was+saved" in r.headers["location"]
+
+
 def test_environment_still_wins(blank_install, monkeypatch):
     monkeypatch.setenv("CF_API_TOKEN", "fake-token")
     monkeypatch.setenv("CF_ACCOUNT_ID", "acct123")

@@ -11,10 +11,12 @@ services:
     image: ${CF0T_IMAGE:?set CF0T_IMAGE, for example ghcr.io/yourname/cf0t-manager:latest}
     container_name: cf0t-manager
     restart: unless-stopped
+    init: true
     pull_policy: always
     ports:
       - "${CF0T_PORT:-8099}:8080"
     environment:
+      TZ: ${TZ:-Europe/Amsterdam}
       # All optional: leave them empty and use the web UI instead.
       CF_API_TOKEN: ${CF_API_TOKEN:-}
       CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
