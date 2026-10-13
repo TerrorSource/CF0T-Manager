@@ -74,9 +74,9 @@ For the configuration and the backups, for example:
 /share/CACHEDEV1_DATA/Docker/cf0t-manager/data
 ```
 
-Make it writable by the user the container runs as:
-`chown -R 1000:1000 /share/CACHEDEV1_DATA/Docker/cf0t-manager/data`. If it is
-not, the page says so when you save instead of quietly forgetting your settings.
+You do not have to prepare it: the container starts as root, hands the folder to
+`PUID`/`PGID` and only then drops to that user. If your share refuses that, the
+page says so when you try to save instead of quietly forgetting your settings.
 
 ### 3. Start the container
 
@@ -95,6 +95,8 @@ services:
     network_mode: bridge
     environment:
       - TZ=Europe/Amsterdam               # otherwise times are shown in UTC
+      - PUID=1000                         # run as this user, so the files are yours
+      - PGID=1000
     ports:
       - 8099:8080
     volumes:
@@ -105,6 +107,9 @@ services:
   first time you open it and keeps them in `/data`. Put them in the stack as
   `CF_API_TOKEN`, `CF_ACCOUNT_ID` and `CF0T_PASSWORD` if you would rather keep
   secrets in Portainer; set that way they become read-only in the page.
+- `PUID` / `PGID` — the user the container runs as, so the files it writes on
+  the NAS belong to you. The mounted folder is handed to this user at startup.
+  Set `PUID=0` to stay root.
 - The folder path — the one from step 2.
 - `TZ` only affects displayed times, for instance in the backup list.
 
@@ -146,8 +151,9 @@ never part of a restore.
   certificate* under the advanced origin options.
 - **No tunnels, or no domain dropdown** — the token is missing
   *Cloudflare Tunnel: Edit* or *Zone: Read*.
-- **Settings do not survive a restart** — the mounted folder is not writable by
-  uid 1000.
+- **Settings do not survive a restart** — the container could not take ownership
+  of the mounted folder. The log says so at startup; `chown -R 1000:1000` on the
+  folder from the NAS side fixes it.
 
 ## Safety
 
