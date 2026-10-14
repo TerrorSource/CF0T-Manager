@@ -17,10 +17,15 @@ _serializer = URLSafeTimedSerializer(settings.secret_key, salt="cfzt-login")
 
 MIN_PASSWORD_LENGTH = 8
 
-# Login throttling, per client address, kept in memory.
+# Login throttling. Per address, plus a global counter: the per-address one can
+# be sidestepped by anyone able to set X-Forwarded-For, the global one cannot.
 MAX_ATTEMPTS = 10
+MAX_ATTEMPTS_GLOBAL = 50
 LOCKOUT_SECONDS = 900
+MAX_TRACKED_ADDRESSES = 1000
+
 _failures: dict[str, tuple[int, float]] = {}
+_global_failures: list[float] = []
 
 
 def _humanise(seconds: float) -> str:
@@ -30,26 +35,41 @@ def _humanise(seconds: float) -> str:
     return f"{max(1, int(seconds))} seconds"
 
 
+def _prune(now: float) -> None:
+    """Drop everything older than the lockout window, so the table cannot grow
+    without bound on forged addresses."""
+    for who, (_, last) in list(_failures.items()):
+        if now - last >= LOCKOUT_SECONDS:
+            _failures.pop(who, None)
+    while _global_failures and now - _global_failures[0] >= LOCKOUT_SECONDS:
+        _global_failures.pop(0)
+    if len(_failures) > MAX_TRACKED_ADDRESSES:
+        for who in sorted(_failures, key=lambda k: _failures[k][1])[:len(_failures) // 2]:
+            _failures.pop(who, None)
+
+
 def lockout_remaining(who: str) -> str:
-    """Empty when this address may try again, otherwise how long it still has to wait."""
+    """Empty when a login may be tried, otherwise how long it still has to wait."""
+    now = time.monotonic()
+    _prune(now)
+
+    if len(_global_failures) >= MAX_ATTEMPTS_GLOBAL:
+        return _humanise(LOCKOUT_SECONDS - (now - _global_failures[0]))
+
     count, last = _failures.get(who, (0, 0.0))
-    if count < MAX_ATTEMPTS:
-        return ""
-    waited = time.monotonic() - last
-    if waited >= LOCKOUT_SECONDS:
-        _failures.pop(who, None)
-        return ""
-    return _humanise(LOCKOUT_SECONDS - waited)
+    if count >= MAX_ATTEMPTS:
+        return _humanise(LOCKOUT_SECONDS - (now - last))
+    return ""
 
 
 def register_failure(who: str) -> int:
     """Count a wrong password. Returns how many attempts are left, 0 once locked."""
-    count, last = _failures.get(who, (0, 0.0))
-    if count >= MAX_ATTEMPTS and time.monotonic() - last >= LOCKOUT_SECONDS:
-        count = 0
-    count += 1
-    _failures[who] = (count, time.monotonic())
-    return max(0, MAX_ATTEMPTS - count)
+    now = time.monotonic()
+    _prune(now)
+    count, _ = _failures.get(who, (0, 0.0))
+    _failures[who] = (count + 1, now)
+    _global_failures.append(now)
+    return max(0, MAX_ATTEMPTS - (count + 1))
 
 
 def register_success(who: str) -> None:
@@ -58,6 +78,7 @@ def register_success(who: str) -> None:
 
 def reset_throttle() -> None:
     _failures.clear()
+    _global_failures.clear()
 
 
 def hash_password(password: str) -> str:

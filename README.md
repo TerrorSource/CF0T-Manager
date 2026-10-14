@@ -46,6 +46,8 @@ Open `http://<your-nas-ip>:8099`. Four tabs:
   connect timeout.
 - **Backup** — download the whole configuration, or keep copies in `/data`.
   Restoring always shows the difference first.
+- **Changes** — what this tool changed, when, and from which address. Changes
+  you make in the Cloudflare dashboard itself are not in there.
 - **Settings** — API token, which tunnel to manage, your password, session
   length, and the backup schedule.
 
@@ -170,7 +172,11 @@ password and **do not open port 8099 to the internet**. Better: add it to
 Cloudflare Zero Trust as an application of its own, behind your usual policy,
 and switch on *Only send the session cookie over https* under Settings.
 
-Ten wrong passwords from one address lock it out for fifteen minutes. Every form
+Ten wrong passwords from one address lock it out for fifteen minutes, and fifty
+across all addresses lock the login itself, which is what actually stops someone
+who can pick their own `X-Forwarded-For`. Narrow `CF0T_TRUSTED_PROXIES` to
+whatever sits in front of the container and the per-address limit becomes real
+too. Every form
 carries a token that has to match a cookie, so another site cannot submit to this
 one with your session attached. There is deliberately no password reset in the
 page: delete `config.json` from `/data` and the setup wizard starts over, which

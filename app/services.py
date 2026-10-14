@@ -13,6 +13,7 @@ from .cf import CloudflareClient, CloudflareError
 # briefly and thrown away as soon as anything is written.
 OVERVIEW_TTL = 60.0
 _overview_cache: dict[str, tuple[float, list, dict]] = {}
+_overview_locks: dict[str, asyncio.Lock] = {}
 
 
 def invalidate_overview(tunnel_id: str = "") -> None:
@@ -243,11 +244,28 @@ class ZeroTrustManager:
                     by_name.setdefault((record.get("name") or "").lower(), record)
         return zones, by_name, ""
 
-    async def load_overview(self, with_dns: bool = True,
-                            refresh: bool = False) -> tuple[list[ServiceRow], dict]:
+    def _fresh_enough(self, refresh: bool):
         cached = _overview_cache.get(self.tunnel_id)
         if cached and not refresh and time.monotonic() - cached[0] < OVERVIEW_TTL:
             return cached[1], cached[2]
+        return None
+
+    async def load_overview(self, with_dns: bool = True,
+                            refresh: bool = False) -> tuple[list[ServiceRow], dict]:
+        ready = self._fresh_enough(refresh)
+        if ready:
+            return ready
+
+        # One fetch at a time per tunnel: without this, every request that
+        # arrives during a refresh starts its own round of API calls.
+        lock = _overview_locks.setdefault(self.tunnel_id, asyncio.Lock())
+        async with lock:
+            ready = self._fresh_enough(refresh and False)
+            if ready:
+                return ready
+            return await self._load_overview(with_dns)
+
+    async def _load_overview(self, with_dns: bool) -> tuple[list[ServiceRow], dict]:
 
         if with_dns:
             config, apps, (zones, dns_by_name, dns_error) = await asyncio.gather(
@@ -462,10 +480,11 @@ class ZeroTrustManager:
                         "records": kept})
         return out
 
-    async def restore_dns(self, snapshot: list[dict]) -> tuple[int, int]:
+    async def restore_dns(self, snapshot: list[dict]) -> tuple[int, int, list[str]]:
         """Recreate records that are gone. Existing names are left alone, the
         same rule the rest of the tool follows for DNS."""
         created = skipped = 0
+        unreachable: list[str] = []
         for zone in snapshot:
             zone_id = zone.get("zone_id")
             if not zone_id:
@@ -474,23 +493,27 @@ class ZeroTrustManager:
                 present = {(r.get("name") or "").lower()
                            for r in await self.cf.list_dns_records(zone_id)}
             except CloudflareError:
+                unreachable.append(zone.get("zone_name") or zone_id)
                 continue
             for record in zone.get("records") or []:
                 name = (record.get("name") or "").lower()
                 if not name or name in present:
                     skipped += 1
                     continue
-                await self.cf.create_dns_record(zone_id, {
+                payload = {
                     "type": record.get("type", "CNAME"),
                     "name": record.get("name"),
                     "content": record.get("content"),
                     "proxied": bool(record.get("proxied")),
-                })
+                }
+                if record.get("ttl"):  # 1 means automatic, which is also the default
+                    payload["ttl"] = record["ttl"]
+                await self.cf.create_dns_record(zone_id, payload)
                 present.add(name)
                 created += 1
         if created:
             invalidate_overview(self.tunnel_id)
-        return created, skipped
+        return created, skipped, unreachable
 
     async def dns_records_for(self, hostname: str, zones: list[dict]) -> list[dict]:
         """Every address record on this hostname, so the delete screen can show

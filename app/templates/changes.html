@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% set active_page = 'changes' %}
+{% block content %}
+<h1>Changes</h1>
+<p class="sub">What this tool changed, newest first. Changes made in the Cloudflare dashboard
+itself are not in here.</p>
+
+<div class="panel">
+  {% if entries %}
+  <table>
+    <thead><tr><th>When</th><th>What</th><th>Hostname</th><th>Details</th><th>From</th></tr></thead>
+    <tbody>
+    {% for entry in entries %}
+      <tr>
+        <td class="hint" style="white-space:nowrap">{{ entry.when }}</td>
+        <td><span class="badge {{ 'warn' if entry.action in ('deleted', 'dns overwritten') }}">{{ entry.action }}</span></td>
+        <td>{{ entry.target }}</td>
+        <td class="hint">{{ entry.detail }}</td>
+        <td class="hint mono">{{ entry['from'] or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">Nothing changed through this tool yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

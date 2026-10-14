@@ -7,6 +7,12 @@ PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 DATA="${CF0T_DATA_DIR:-/data}"
 
+# Which peers may set X-Forwarded-For. "*" trusts anyone, which is fine behind a
+# tunnel but lets a direct caller fake its address and slip past the login
+# throttle. Narrow it to cloudflared's address once you know it.
+TRUSTED="${CF0T_TRUSTED_PROXIES:-*}"
+set -- "$@" --forwarded-allow-ips "$TRUSTED"
+
 if [ "$(id -u)" = "0" ]; then
     mkdir -p "$DATA"
 

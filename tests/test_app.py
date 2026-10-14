@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from app import auth, backups, cf, services, main
+from app import auth, backups, cf, changelog, services, main
 from app.cf import CloudflareError
 from app.config import settings
 
@@ -572,14 +572,22 @@ def test_route_order_can_be_changed():
     assert "ha.makooy.nl" in page and "always last" in page
 
     before = [r.get("hostname") for r in STATE["config"]["ingress"] if r.get("hostname")]
-    r = post(tc, "/routes/move", data={"index": "1", "direction": "up"}, follow_redirects=False)
+    r = post(tc, "/routes/move", data={"hostname": before[1], "path": "", "direction": "up"},
+             follow_redirects=False)
     assert "err=" not in r.headers["location"], r.headers["location"]
     after = [r.get("hostname") for r in STATE["config"]["ingress"] if r.get("hostname")]
     assert after[0] == before[1] and after[1] == before[0], "the two swapped"
     assert cf.is_catch_all(STATE["config"]["ingress"][-1]), "catch-all still last"
 
-    r = post(tc, "/routes/move", data={"index": "0", "direction": "up"}, follow_redirects=False)
+    r = post(tc, "/routes/move", data={"hostname": after[0], "path": "", "direction": "up"},
+             follow_redirects=False)
     assert "err=" in r.headers["location"], "cannot move the first one up"
+
+    # a route that disappeared between drawing the page and pressing the button
+    r = post(tc, "/routes/move", data={"hostname": "gone.makooy.nl", "path": "",
+                                       "direction": "up"}, follow_redirects=False)
+    assert "no+longer+in+the+tunnel" in r.headers["location"], \
+        "must not shuffle a different route when the list changed"
 
 
 def test_backup_contains_dns_and_can_put_it_back():
@@ -779,6 +787,85 @@ def test_retention_keeps_only_the_newest():
     assert [backups.read(e["name"])["n"] for e in left] == [4, 3], "the newest two survive"
     for item in left:
         backups.remove(item["name"])
+
+
+def test_the_global_throttle_cannot_be_sidestepped_by_changing_address():
+    """Anyone who can set X-Forwarded-For gets a fresh per-address budget, so a
+    global counter has to catch it as well."""
+    auth.reset_throttle()
+    for i in range(auth.MAX_ATTEMPTS_GLOBAL):
+        auth.register_failure(f"10.0.0.{i % 200}")
+    assert auth.lockout_remaining("10.0.0.99"), "a brand new address is locked out too"
+    auth.reset_throttle()
+    assert not auth.lockout_remaining("10.0.0.99")
+
+
+def test_the_throttle_table_does_not_grow_without_bound():
+    auth.reset_throttle()
+    for i in range(auth.MAX_TRACKED_ADDRESSES + 200):
+        auth.register_failure(f"10.1.{i // 250}.{i % 250}")
+    assert len(auth._failures) <= auth.MAX_TRACKED_ADDRESSES
+    auth.reset_throttle()
+
+
+def test_logging_in_hands_out_a_new_csrf_token():
+    auth.reset_throttle()
+    fresh = TestClient(main.app)
+    fresh.get("/login")
+    before = fresh.cookies.get(main.CSRF_COOKIE)
+    post(fresh, "/login", data={"password": "secret"}, follow_redirects=False)
+    after = fresh.cookies.get(main.CSRF_COOKIE)
+    assert before and after and before != after, "a token from before the login is not reused"
+
+
+def test_backup_due_logic():
+    import time as _time
+    for item in backups.listing():
+        backups.remove(item["name"])
+    assert main.backup_due() is True, "with no backup at all, one is due"
+
+    backups.write({"format": backups.FORMAT}, "auto")
+    assert main.backup_due() is False, "one was just written"
+    assert main.backup_due(_time.time() + 25 * 3600) is True, "a day later it is due again"
+
+    settings.save(auto_backup=False)
+    assert main.backup_due(_time.time() + 25 * 3600) is False, "unless it is switched off"
+    settings.save(auto_backup=True)
+    for item in backups.listing():
+        backups.remove(item["name"])
+
+
+def test_changes_are_recorded():
+    reset_state()
+    login()
+    path = settings.data_dir / changelog.FILE
+    path.unlink(missing_ok=True)
+
+    post(tc, "/new", data={
+        "hostname": "grafana", "zone": "makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "3000",
+    }, follow_redirects=False)
+    post(tc, "/delete", data={"hostname": "grafana.makooy.nl", "path": "", "del_route": "1"},
+         follow_redirects=False)
+
+    entries = changelog.entries()
+    assert [e["action"] for e in entries[:2]] == ["deleted", "created"], "newest first"
+    assert all(e["target"] == "grafana.makooy.nl" for e in entries[:2])
+    assert entries[0]["from"] == "testclient"
+
+    page = tc.get("/changes").text
+    assert "grafana.makooy.nl" in page and "deleted" in page
+    path.unlink(missing_ok=True)
+
+
+def test_the_change_log_is_trimmed():
+    path = settings.data_dir / changelog.FILE
+    path.unlink(missing_ok=True)
+    for i in range(changelog.MAX_LINES + 50):
+        changelog.record("edited", f"host{i}.makooy.nl")
+    assert len(path.read_text().splitlines()) <= changelog.MAX_LINES
+    assert changelog.entries(1)[0]["target"].endswith(f"{changelog.MAX_LINES + 49}.makooy.nl")
+    path.unlink(missing_ok=True)
 
 
 # -------------------------------------------------------------- unit bits ---

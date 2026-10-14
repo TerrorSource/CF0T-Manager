@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import auth, backups, cf, services
+from . import auth, backups, cf, changelog, services
 from .cf import CloudflareClient, CloudflareError
 from .config import active_tunnel_id, set_active_tunnel_id, settings
 from .services import ZeroTrustManager
@@ -68,20 +68,27 @@ async def store_backup(kind: str, reason: str, label: str = "") -> tuple[str, st
         return "", str(exc) or exc.__class__.__name__
 
 
+def backup_due(now: float | None = None) -> bool:
+    """Whether an automatic backup should be written right now."""
+    if not (settings.auto_backup and settings.configured and active_tunnel_id()):
+        return False
+    newest = backups.newest_time("auto")
+    if newest is None:
+        return True
+    return ((now or time.time()) - newest) >= settings.auto_backup_hours * 3600
+
+
 async def backup_scheduler() -> None:
     """Make an automatic backup whenever the newest one is old enough.
     Checking rather than sleeping a full day keeps it correct across restarts."""
     while True:
         try:
-            if settings.auto_backup and settings.configured and active_tunnel_id():
-                newest = backups.newest_time("auto")
-                due = newest is None or (time.time() - newest) >= settings.auto_backup_hours * 3600
-                if due:
-                    name, error = await store_backup("auto", "automatic")
-                    if name:
-                        logger.info("automatic backup written: %s", name)
-                    else:
-                        logger.warning("automatic backup failed: %s", error)
+            if backup_due():
+                name, error = await store_backup("auto", "automatic")
+                if name:
+                    logger.info("automatic backup written: %s", name)
+                else:
+                    logger.warning("automatic backup failed: %s", error)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -129,8 +136,7 @@ def client() -> CloudflareClient:
     global _client, _client_key
     key = (settings.api_token, settings.account_id)
     if _client is None or _client_key != key:
-        if _client is not None:
-            _stale_clients.append(_client)
+        _retire(_client)
         _client = CloudflareClient(*key)
         _client_key = key
     return _client
@@ -140,10 +146,20 @@ def forget_cached_data() -> None:
     services.invalidate_overview()
 
 
+def _retire(old: CloudflareClient | None) -> None:
+    """Close a replaced client in the background instead of keeping every one
+    of them around until the process stops."""
+    if old is None:
+        return
+    try:
+        asyncio.get_running_loop().create_task(old.aclose())
+    except RuntimeError:  # no loop yet, e.g. at import time
+        _stale_clients.append(old)
+
+
 def reset_client() -> None:
     global _client, _client_key
-    if _client is not None:
-        _stale_clients.append(_client)
+    _retire(_client)
     _client = None
     _client_key = None
     forget_cached_data()
@@ -204,6 +220,13 @@ def render(request: Request, template: str, **ctx) -> HTMLResponse:
     response.set_cookie(CSRF_COOKIE, token, httponly=True, samesite="lax",
                         secure=settings.secure_cookie, path="/")
     return response
+
+
+def rotate_csrf(response) -> None:
+    """A new token when the session changes, so one handed out before logging
+    in does not stay valid afterwards."""
+    response.set_cookie(CSRF_COOKIE, secrets.token_hex(16), httponly=True, samesite="lax",
+                        secure=settings.secure_cookie, path="/")
 
 
 async def csrf_guard(request: Request) -> None:
@@ -278,6 +301,7 @@ async def login(request: Request, password: str = Form("")):
     auth.register_success(who)
     response = RedirectResponse("/", status_code=303)
     auth.set_session_cookie(response, auth.make_token())
+    rotate_csrf(response)
     return response
 
 
@@ -285,6 +309,7 @@ async def login(request: Request, password: str = Form("")):
 async def logout():
     response = RedirectResponse("/login", status_code=303)
     auth.clear_session_cookie(response)
+    rotate_csrf(response)
     return response
 
 
@@ -541,18 +566,20 @@ async def export_xlsx():
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
 
+    table = export_rows(rows)
+
     book = Workbook()
     sheet = book.active
     sheet.title = "Applications"
     sheet.append(list(EXPORT_COLUMNS))
     for cell in sheet[1]:
         cell.font = Font(bold=True)
-    for line in export_rows(rows):
+    for line in table:
         sheet.append(line)
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = f"A1:{get_column_letter(len(EXPORT_COLUMNS))}{sheet.max_row}"
     for index, header in enumerate(EXPORT_COLUMNS, start=1):
-        longest = max([len(header)] + [len(str(r[index - 1])) for r in export_rows(rows)] or [0])
+        longest = max([len(header)] + [len(str(line[index - 1])) for line in table])
         sheet.column_dimensions[get_column_letter(index)].width = min(48, longest + 3)
 
     stream = io.BytesIO()
@@ -617,6 +644,7 @@ async def new_submit(request: Request):
         done = ", ".join(steps) or "nothing"
         return redirect("/", err=f"{exc} — already done: {done}.")
 
+    changelog.record("created", hostname + path, ", ".join(steps), client_ip(request))
     return redirect("/", ok=f"Created {hostname}: " + ", ".join(steps))
 
 
@@ -721,6 +749,8 @@ async def edit_submit(request: Request):
         done = ", ".join(steps) or "nothing"
         return redirect("/", err=f"{exc} — already done: {done}.")
 
+    if steps:
+        changelog.record("edited", hostname + path, ", ".join(steps), client_ip(request))
     return redirect("/", ok=f"{hostname}: " + ", ".join(steps or ["no changes"]))
 
 
@@ -782,6 +812,8 @@ async def delete_submit(request: Request):
         done = ", ".join(steps) or "nothing"
         return redirect("/", err=f"{exc} — already done: {done}.")
 
+    if steps:
+        changelog.record("deleted", hostname + path, ", ".join(steps), client_ip(request))
     return redirect("/", ok=f"{hostname}: " + ", ".join(steps or ["nothing selected"]))
 
 
@@ -793,6 +825,7 @@ async def dns_overwrite(request: Request, hostname: str = Form("")):
         message = await manager().ensure_dns(hostname, zones, overwrite=True)
     except (CloudflareError, services.DnsConflict) as exc:
         return redirect("/", err=str(exc))
+    changelog.record("dns overwritten", hostname, message, client_ip(request))
     return redirect("/", ok=f"{hostname}: {message.lower()}")
 
 
@@ -808,31 +841,38 @@ async def routes_order(request: Request):
 
 
 @app.post("/routes/move")
-async def routes_move(request: Request, index: str = Form(""), direction: str = Form("")):
+async def routes_move(request: Request, hostname: str = Form(""), path: str = Form(""),
+                      direction: str = Form("")):
+    """Identified by hostname and path rather than by position: the list may
+    have changed since the page was drawn."""
     mgr = manager()
-    try:
-        position = int(index)
-    except ValueError:
-        return redirect("/routes", err="Could not tell which route to move.")
-
     try:
         config = await client().get_tunnel_config(mgr.tunnel_id)
         rules, _ = cf.split_ingress(config.get("ingress") or [])
+        order = [cf.rule_key(r.get("hostname"), r.get("path")) for r in rules]
+        wanted = cf.rule_key(hostname, path)
+        if wanted not in order:
+            return redirect("/routes", err=f"{hostname} is no longer in the tunnel "
+                                           f"configuration. The list has been reloaded.")
+
+        position = order.index(wanted)
         target = position - 1 if direction == "up" else position + 1
-        if not (0 <= position < len(rules) and 0 <= target < len(rules)):
+        if not 0 <= target < len(order):
             return redirect("/routes", err="That route is already at the end.")
 
-        order = [cf.rule_key(r.get("hostname"), r.get("path")) for r in rules]
         order[position], order[target] = order[target], order[position]
-        config = cf.reorder_rules(config, order)
-        await client().put_tunnel_config(mgr.tunnel_id, config)
+        await client().put_tunnel_config(mgr.tunnel_id, cf.reorder_rules(config, order))
         services.invalidate_overview(mgr.tunnel_id)
     except CloudflareError as exc:
         return redirect("/routes", err=str(exc))
 
-    moved = rules[position]
-    return redirect("/routes", ok=f"Moved {moved.get('hostname')}{moved.get('path') or ''} "
-                                  f"{direction}.")
+    changelog.record("reordered", hostname + path, f"moved {direction}", client_ip(request))
+    return redirect("/routes", ok=f"Moved {hostname}{path} {direction}.")
+
+
+@app.get("/changes", response_class=HTMLResponse)
+async def changes_page(request: Request):
+    return render(request, "changes.html", entries=changelog.entries())
 
 
 # ---------------------------------------------------------------- backup ---
@@ -987,13 +1027,16 @@ async def backup_apply(request: Request, token: str = Form(""), restore_routes: 
                 created += 1
             steps.append(f"created {created} Access app(s)")
         if restore_dns:
-            created, skipped = await mgr.restore_dns(data.get("dns_zones") or [])
+            created, skipped, unreachable = await mgr.restore_dns(data.get("dns_zones") or [])
             steps.append(f"created {created} DNS record(s)"
-                         + (f", left {skipped} existing one(s) alone" if skipped else ""))
+                         + (f", left {skipped} existing one(s) alone" if skipped else "")
+                         + (f", could not reach {', '.join(unreachable)}" if unreachable else ""))
     except CloudflareError as exc:
         return redirect("/backup", err=f"{exc} — already done: {', '.join(steps) or 'nothing'}.")
     finally:
         path.unlink(missing_ok=True)
+    changelog.record("restored", data.get("tunnel", {}).get("name", "tunnel"),
+                     ", ".join(steps), client_ip(request))
     return redirect("/", ok="Restore finished: " + ", ".join(steps or ["nothing selected"]))
 
 
