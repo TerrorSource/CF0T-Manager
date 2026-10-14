@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import time
 
 from fastapi import Request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -15,6 +16,48 @@ _SCRYPT = {"n": 2 ** 14, "r": 8, "p": 1, "dklen": 32}
 _serializer = URLSafeTimedSerializer(settings.secret_key, salt="cfzt-login")
 
 MIN_PASSWORD_LENGTH = 8
+
+# Login throttling, per client address, kept in memory.
+MAX_ATTEMPTS = 10
+LOCKOUT_SECONDS = 900
+_failures: dict[str, tuple[int, float]] = {}
+
+
+def _humanise(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    if minutes >= 1:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    return f"{max(1, int(seconds))} seconds"
+
+
+def lockout_remaining(who: str) -> str:
+    """Empty when this address may try again, otherwise how long it still has to wait."""
+    count, last = _failures.get(who, (0, 0.0))
+    if count < MAX_ATTEMPTS:
+        return ""
+    waited = time.monotonic() - last
+    if waited >= LOCKOUT_SECONDS:
+        _failures.pop(who, None)
+        return ""
+    return _humanise(LOCKOUT_SECONDS - waited)
+
+
+def register_failure(who: str) -> int:
+    """Count a wrong password. Returns how many attempts are left, 0 once locked."""
+    count, last = _failures.get(who, (0, 0.0))
+    if count >= MAX_ATTEMPTS and time.monotonic() - last >= LOCKOUT_SECONDS:
+        count = 0
+    count += 1
+    _failures[who] = (count, time.monotonic())
+    return max(0, MAX_ATTEMPTS - count)
+
+
+def register_success(who: str) -> None:
+    _failures.pop(who, None)
+
+
+def reset_throttle() -> None:
+    _failures.clear()
 
 
 def hash_password(password: str) -> str:

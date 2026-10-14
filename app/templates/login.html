@@ -6,12 +6,23 @@
     <div class="panel-head"><span class="brand"><span class="dot"></span> CF0T-Manager</span></div>
     <div class="panel-body">
       <form method="post" action="/login">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="field">
           <label for="password">Password</label>
           <input type="password" id="password" name="password" autofocus autocomplete="current-password">
         </div>
         <button class="btn primary" type="submit" style="width:100%">Log in</button>
       </form>
+
+      <details class="adv" style="margin-top:18px">
+        <summary>Forgotten your password?</summary>
+        <p class="hint">There is no reset from this page on purpose. Delete
+          <span class="mono">config.json</span> from the container's
+          <span class="mono">/data</span> volume and reload: the setup wizard starts again.
+          Your Cloudflare API token and the selected tunnel are in that same file, so have
+          the token at hand. Your backups are in <span class="mono">/data/backups</span>
+          and are not affected.</p>
+      </details>
     </div>
   </div>
 </div>

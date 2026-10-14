@@ -16,6 +16,7 @@
 <div class="toolbar">
   <input type="search" id="filter" autocomplete="off" autofocus
          placeholder="Search by hostname, service, app name or policy…">
+  <a class="btn" href="/routes" title="Change the order cloudflared matches routes in">Route order</a>
   <a class="btn" href="/?refresh=1" title="Fetch everything from Cloudflare again">Refresh</a>
   <a class="btn" href="/export.xlsx" title="Download this overview as an Excel file">Excel</a>
   <a class="btn" href="/export.csv" title="Download this overview as a CSV file">CSV</a>
@@ -40,6 +41,12 @@
           {% if row.dns_ok and not row.has_route and not row.has_app %}
           <span class="badge warn" title="DNS points at the tunnel, but there is no route or Access app">unused DNS</span>
           {% endif %}
+          {% if row.app and not row.is_self_hosted %}
+          <span class="badge" title="Not a tunnel-backed application, so it is managed in the Cloudflare dashboard">{{ row.app_type|replace('_', ' ') }}</span>
+          {% endif %}
+          {% if row.other_hostnames %}
+          <span class="badge" title="{{ row.other_hostnames|join(', ') }}">+{{ row.other_hostnames|length }} hostname{{ 's' if row.other_hostnames|length != 1 }}</span>
+          {% endif %}
         </td>
         <td class="mono">{{ row.service or '—' }}</td>
         <td>{{ row.app_name or '—' }}</td>
@@ -58,7 +65,11 @@
           </div>
         </td>
         <td class="actions">
+          {% if row.editable %}
           <a class="btn small" href="/edit?h={{ row.hostname }}&p={{ row.path }}">Edit</a>
+          {% else %}
+          <span class="badge off" title="Edit this one in the Cloudflare dashboard">not editable here</span>
+          {% endif %}
           <a class="btn small danger" href="/delete?h={{ row.hostname }}&p={{ row.path }}">Delete</a>
         </td>
       </tr>

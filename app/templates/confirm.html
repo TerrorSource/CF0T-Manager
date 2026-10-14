@@ -11,6 +11,7 @@
     </ul>
 
     <form method="post" action="{{ action }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {% for key, value in fields %}
       <input type="hidden" name="{{ key }}" value="{{ value }}">
       {% endfor %}

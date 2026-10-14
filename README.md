@@ -33,7 +33,13 @@ Open `http://<your-nas-ip>:8099`. Four tabs:
 - **Applications** — every hostname on the tunnel, with its origin, Access app,
   policies and DNS status. Search filters as you type. A record still pointing at
   the tunnel without a route or application behind it is flagged *unused DNS*, so
-  leftovers from a rename do not go unnoticed. Exports to Excel or CSV.
+  leftovers from a rename do not go unnoticed. An application covering more than
+  one hostname shows up under each of them. SaaS, infrastructure and the other
+  non-tunnel application types are listed with their kind and left read-only,
+  because the origin form does not apply to them. Exports to Excel or CSV.
+- **Route order** — cloudflared takes the first rule that matches, which only
+  matters when rules overlap, for instance the same hostname with different
+  paths. Move them up and down here; the catch-all stays last.
 - **New application** — the form above. Subdomain plus a domain dropdown, origin
   as protocol/host/port, and the advanced origin options cloudflared supports:
   `noTLSVerify` for a self-signed origin like Proxmox, HTTP/2, host header,
@@ -126,8 +132,9 @@ anything, and logs you in. One tunnel on the account is selected for you.
 
 ## Backups
 
-A backup holds every ingress rule on the tunnel, all Access applications and the
-reusable policies. Three kinds are kept in `/data/backups`:
+A backup holds every ingress rule on the tunnel, all Access applications, the
+reusable policies and the address records of every zone. Three kinds are kept in
+`/data/backups`:
 
 - **automatic** — every 24 hours. The schedule looks at how old the newest one
   is rather than sleeping a full day, so a restart never skips or doubles a run.
@@ -137,8 +144,9 @@ reusable policies. Three kinds are kept in `/data/backups`:
 
 Both automatic kinds are on by default; interval, retention and the switches are
 under Settings. Restoring puts routes back and recreates missing applications
-with everything the backup holds, after showing you what would change. DNS is
-never part of a restore.
+with everything the backup holds, after showing you what would change. DNS
+records are put back only where they are missing: one that still exists is never
+touched, whatever it points at now.
 
 ## When something goes wrong
 
@@ -162,6 +170,12 @@ password and **do not open port 8099 to the internet**. Better: add it to
 Cloudflare Zero Trust as an application of its own, behind your usual policy,
 and switch on *Only send the session cookie over https* under Settings.
 
+Ten wrong passwords from one address lock it out for fifteen minutes. Every form
+carries a token that has to match a cookie, so another site cannot submit to this
+one with your session attached. There is deliberately no password reset in the
+page: delete `config.json` from `/data` and the setup wizard starts over, which
+needs your Cloudflare token again. Backups are not affected by that.
+
 Your API token sits in `config.json` in the mounted folder, readable only by the
 container user, the same as it would be in a `.env`. Treat that folder as a
 secret. Your password is stored as an scrypt hash and never in a recoverable
@@ -183,6 +197,9 @@ Python + FastAPI with server-rendered Jinja templates, talking to the Cloudflare
   list, and the catch-all entry has to stay last or cloudflared matches nothing.
 - Applications take **reusable policies** by `{id, precedence}`; reusable and
   inline policies are mutually exclusive in one request.
+
+- An application can cover more hostnames than its `domain` field: the rest live
+  in `destinations`, which is what the overview matches on as well.
 
 The overview costs four or five calls, so they run in parallel and the result is
 cached for a minute, dropped on every write. Filtering is done in the browser.

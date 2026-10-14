@@ -2,7 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from test_app import TUNNEL, login, make_client  # noqa: F401  (shared mock transport)
+from test_app import TUNNEL, login, make_client, post  # noqa: F401  (shared mock transport)
 from app import auth, main
 from app.config import settings
 
@@ -33,7 +33,7 @@ def test_everything_redirects_to_the_wizard(blank_install):
 
 
 def test_wizard_rejects_bad_credentials(blank_install):
-    r = blank_install.post("/welcome", data={
+    r = post(blank_install, "/welcome", data={
         "password": "longenough1", "password_confirm": "longenough1",
         "api_token": "not-a-real-token", "account_id": "acct123",
     })
@@ -43,11 +43,11 @@ def test_wizard_rejects_bad_credentials(blank_install):
 
 
 def test_wizard_rejects_weak_or_mismatched_password(blank_install):
-    r = blank_install.post("/welcome", data={
+    r = post(blank_install, "/welcome", data={
         "password": "short", "password_confirm": "short",
         "api_token": "fake-token", "account_id": "acct123"})
     assert "at least 8 characters" in r.text
-    r = blank_install.post("/welcome", data={
+    r = post(blank_install, "/welcome", data={
         "password": "longenough1", "password_confirm": "longenough2",
         "api_token": "fake-token", "account_id": "acct123"})
     assert "do not match" in r.text
@@ -55,7 +55,7 @@ def test_wizard_rejects_weak_or_mismatched_password(blank_install):
 
 
 def test_wizard_completes_and_logs_you_in(blank_install):
-    r = blank_install.post("/welcome", data={
+    r = post(blank_install, "/welcome", data={
         "password": "longenough1", "password_confirm": "longenough1",
         "api_token": "fake-token", "account_id": "acct123",
     }, follow_redirects=False)
@@ -76,15 +76,15 @@ def test_wizard_completes_and_logs_you_in(blank_install):
 
 
 def test_password_change_signs_out_other_sessions(blank_install):
-    blank_install.post("/welcome", data={
+    post(blank_install, "/welcome", data={
         "password": "longenough1", "password_confirm": "longenough1",
         "api_token": "fake-token", "account_id": "acct123"}, follow_redirects=False)
 
     other = TestClient(main.app)
-    other.post("/login", data={"password": "longenough1"}, follow_redirects=False)
+    post(other, "/login", data={"password": "longenough1"}, follow_redirects=False)
     assert other.get("/", follow_redirects=False).status_code == 200
 
-    r = blank_install.post("/settings/password", data={
+    r = post(blank_install, "/settings/password", data={
         "current_password": "longenough1",
         "password": "brandnewpass2", "password_confirm": "brandnewpass2",
     }, follow_redirects=False)
@@ -97,10 +97,10 @@ def test_password_change_signs_out_other_sessions(blank_install):
 
 
 def test_password_change_needs_the_current_one(blank_install):
-    blank_install.post("/welcome", data={
+    post(blank_install, "/welcome", data={
         "password": "longenough1", "password_confirm": "longenough1",
         "api_token": "fake-token", "account_id": "acct123"}, follow_redirects=False)
-    r = blank_install.post("/settings/password", data={
+    r = post(blank_install, "/settings/password", data={
         "current_password": "wrong", "password": "brandnewpass2",
         "password_confirm": "brandnewpass2"}, follow_redirects=False)
     assert "err=" in r.headers["location"]
@@ -108,26 +108,26 @@ def test_password_change_needs_the_current_one(blank_install):
 
 
 def test_settings_can_replace_the_token(blank_install):
-    blank_install.post("/welcome", data={
+    post(blank_install, "/welcome", data={
         "password": "longenough1", "password_confirm": "longenough1",
         "api_token": "fake-token", "account_id": "acct123"}, follow_redirects=False)
 
-    r = blank_install.post("/settings/cloudflare", data={
+    r = post(blank_install, "/settings/cloudflare", data={
         "api_token": "rubbish", "account_id": "acct123"}, follow_redirects=False)
     assert "err=" in r.headers["location"]
     assert settings.api_token == "fake-token", "a rejected token is not stored"
 
-    r = blank_install.post("/settings/cloudflare", data={
+    r = post(blank_install, "/settings/cloudflare", data={
         "api_token": "replacement-token", "account_id": "acct123"}, follow_redirects=False)
     assert "err=" not in r.headers["location"], r.headers["location"]
     assert settings.api_token == "replacement-token"
 
 
 def test_preferences_round_trip(blank_install):
-    blank_install.post("/welcome", data={
+    post(blank_install, "/welcome", data={
         "password": "longenough1", "password_confirm": "longenough1",
         "api_token": "fake-token", "account_id": "acct123"}, follow_redirects=False)
-    blank_install.post("/settings/preferences", data={
+    post(blank_install, "/settings/preferences", data={
         "session_hours": "48", "secure_cookie": "1", "default_origin_host": "10.0.0.5"},
         follow_redirects=False)
     assert settings.session_hours == 48
@@ -139,7 +139,7 @@ def test_preferences_round_trip(blank_install):
 def test_a_read_only_data_volume_is_reported(blank_install, monkeypatch):
     """On a NAS the mounted folder is often owned by root. Settings that cannot
     be written must say so instead of looking saved and vanishing on restart."""
-    blank_install.post("/welcome", data={
+    post(blank_install, "/welcome", data={
         "password": "longenough1", "password_confirm": "longenough1",
         "api_token": "fake-token", "account_id": "acct123"}, follow_redirects=False)
 
@@ -147,7 +147,7 @@ def test_a_read_only_data_volume_is_reported(blank_install, monkeypatch):
         raise OSError(30, "Read-only file system")
 
     monkeypatch.setattr(settings, "save", read_only)
-    r = blank_install.post("/settings/preferences", data={
+    r = post(blank_install, "/settings/preferences", data={
         "session_hours": "48", "default_origin_host": "10.0.0.5"}, follow_redirects=False)
     assert "err=" in r.headers["location"]
     assert "Read-only" in r.headers["location"]

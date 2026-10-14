@@ -28,6 +28,7 @@ through environment variables win and are shown as read-only.</p>
         or Portainer stack variables and restart the container.</p>
     {% else %}
     <form method="post" action="/settings/cloudflare">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="grid c2">
         <div class="field">
           <label for="api_token">Replace API token</label>
@@ -56,6 +57,7 @@ through environment variables win and are shown as read-only.</p>
       <p class="hint">Pinned through <span class="mono">CF_TUNNEL_ID</span>: <span class="mono">{{ settings.tunnel_id }}</span></p>
     {% elif tunnels %}
       <form method="post" action="/settings/tunnel">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="field">
           <label for="tunnel_id">Which tunnel do you want to manage?</label>
           <select id="tunnel_id" name="tunnel_id">
@@ -84,6 +86,7 @@ through environment variables win and are shown as read-only.</p>
       <p class="hint">Login is switched off through <span class="mono">CF0T_DISABLE_LOGIN</span>.</p>
     {% else %}
     <form method="post" action="/settings/password">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="field" style="max-width:420px">
         <label for="current_password">Current password</label>
         <input type="password" id="current_password" name="current_password" autocomplete="current-password" required>
@@ -109,6 +112,7 @@ through environment variables win and are shown as read-only.</p>
   <div class="panel-head">Backups</div>
   <div class="panel-body">
     <form method="post" action="/settings/backups">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="check">
         <input type="checkbox" id="auto_backup" name="auto_backup" value="1"
                {% if settings.auto_backup %}checked{% endif %}>
@@ -142,6 +146,7 @@ through environment variables win and are shown as read-only.</p>
   <div class="panel-head">Preferences</div>
   <div class="panel-body">
     <form method="post" action="/settings/preferences">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="grid c2">
         <div class="field">
           <label for="session_hours">Stay logged in for (hours)</label>

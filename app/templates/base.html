@@ -20,7 +20,7 @@
   <span class="spacer"></span>
   {% if tunnel_id %}<span class="tunnel-chip mono">tunnel {{ tunnel_id[:8] }}…</span>{% endif %}
   {% if settings.auth_enabled %}
-  <form method="post" action="/logout"><button class="btn small">Log out</button></form>
+  <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn small">Log out</button></form>
   {% endif %}
 </header>
 {% endif %}

@@ -10,6 +10,7 @@
         later under Settings.</p>
 
       <form method="post" action="/welcome">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         {% if need_password %}
         <fieldset>
           <legend>1. Pick a password</legend>

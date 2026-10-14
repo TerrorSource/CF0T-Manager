@@ -6,6 +6,7 @@
 <div class="panel">
   <div class="panel-body">
     <form method="post" action="/delete">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="hostname" value="{{ row.hostname }}">
       <input type="hidden" name="path" value="{{ row.path }}">
 

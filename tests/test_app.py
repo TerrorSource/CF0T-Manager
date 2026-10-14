@@ -38,7 +38,13 @@ def reset_state():
                   "custom_deny_message": "Ask Marc for access",
                   "enable_binding_cookie": True,
                   "destinations": [{"type": "public", "uri": "sonarr.makooy.nl"}],
-                  "policies": [{"id": "pol1", "name": "GoogleIDP-Marc-Policy", "precedence": 1}]}],
+                  "policies": [{"id": "pol1", "name": "GoogleIDP-Marc-Policy", "precedence": 1}]},
+                 {"id": "app2", "name": "Google Workspace", "domain": "workspace.makooy.nl",
+                  "type": "saas", "policies": []},
+                 {"id": "app3", "name": "Books", "domain": "readarr.makooy.nl",
+                  "type": "self_hosted", "policies": [],
+                  "destinations": [{"type": "public", "uri": "readarr.makooy.nl"},
+                                   {"type": "public", "uri": "calibre.makooy.nl"}]}],
         "dns": [{"id": "dns1", "type": "CNAME", "name": "sonarr.makooy.nl",
                  "content": f"{TUNNEL}.cfargotunnel.com", "proxied": True}],
     })
@@ -146,19 +152,72 @@ def clean_state():
     yield
 
 
+def post(client, url, data=None, **kwargs):
+    """POST the way a browser does: echo the CSRF cookie back in the form."""
+    token = client.cookies.get(main.CSRF_COOKIE)
+    if not token:
+        client.get("/login")
+        token = client.cookies.get(main.CSRF_COOKIE)
+    payload = dict(data or {})
+    payload.setdefault("csrf_token", token)
+    return client.post(url, data=payload, **kwargs)
+
+
 def login(client=tc, password="secret"):
-    r = client.post("/login", data={"password": password}, follow_redirects=False)
+    r = post(client, "/login", data={"password": password}, follow_redirects=False)
     assert r.status_code == 303, r.text
     return r
 
 
 # ----------------------------------------------------------------- basics ---
 def test_auth_required():
+    auth.reset_throttle()
     fresh = TestClient(main.app)
     r = fresh.get("/", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/login"
-    r = fresh.post("/login", data={"password": "wrong"}, follow_redirects=False)
+    r = post(fresh, "/login", data={"password": "wrong"}, follow_redirects=False)
     assert "err=" in r.headers["location"]
+
+
+def test_a_form_without_a_csrf_token_is_refused():
+    auth.reset_throttle()
+    fresh = TestClient(main.app)
+    fresh.get("/login")  # gets the cookie, which we then do not echo back
+    r = fresh.post("/login", data={"password": "secret"}, follow_redirects=False)
+    assert r.status_code == 400, "a POST that does not carry the token is rejected"
+    assert "expired" in r.text
+
+    r = fresh.post("/login", data={"password": "secret", "csrf_token": "something else"},
+                   follow_redirects=False)
+    assert r.status_code == 400, "and a wrong token is rejected too"
+
+    r = post(fresh, "/login", data={"password": "secret"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers.get("location", "err=")
+
+
+def test_login_is_throttled():
+    auth.reset_throttle()
+    fresh = TestClient(main.app)
+    for attempt in range(auth.MAX_ATTEMPTS):
+        r = post(fresh, "/login", data={"password": "wrong"}, follow_redirects=False)
+        assert "err=" in r.headers["location"]
+    # the next one is refused before the password is even looked at
+    r = post(fresh, "/login", data={"password": "secret"}, follow_redirects=False)
+    assert "Too+many+attempts" in r.headers["location"]
+    assert auth.lockout_remaining("testclient"), "the address is locked out"
+
+    auth.reset_throttle()
+    r = post(fresh, "/login", data={"password": "secret"}, follow_redirects=False)
+    assert "err=" not in r.headers.get("location", "err="), "and can log in once cleared"
+
+
+def test_a_failed_attempt_does_not_block_the_event_loop():
+    """The delay after a wrong password must be awaited, not slept through:
+    time.sleep in an async route freezes every other request."""
+    import inspect
+    code = [line.split("#")[0] for line in inspect.getsource(main.login).splitlines()]
+    assert any("await asyncio.sleep" in line for line in code)
+    assert not any("time.sleep" in line for line in code)
 
 
 def test_dashboard():
@@ -175,7 +234,7 @@ def test_dashboard():
 def test_create_full_app():
     reset_state()
     login()
-    r = tc.post("/new", data={
+    r = post(tc, "/new", data={
         "hostname": "jellyfin", "zone": "makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.9", "origin_port": "8096",
         "create_app": "1", "app_name": "Jellyfin", "session_duration": "24h",
@@ -218,7 +277,7 @@ def test_edit_changes_service_and_policies():
     login()
     r = tc.get("/edit?h=sonarr.makooy.nl&p=")
     assert r.status_code == 200 and "8989" in r.text
-    r = tc.post("/edit", data={
+    r = post(tc, "/edit", data={
         "original_hostname": "sonarr.makooy.nl", "original_path": "",
         "hostname": "sonarr.makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.9", "origin_port": "9999", "noTLSVerify": "1",
@@ -240,7 +299,7 @@ def test_rename_carries_the_dns_record_over():
     login()
     # sonarr has a dedicated CNAME; the DNS checkbox is deliberately NOT sent,
     # which is what the edit form does for a hostname that already has one.
-    r = tc.post("/edit", data={
+    r = post(tc, "/edit", data={
         "original_hostname": "sonarr.makooy.nl", "original_path": "",
         "hostname": "series.makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.9", "origin_port": "8989",
@@ -264,7 +323,7 @@ def test_leftover_dns_is_listed_so_it_can_be_removed():
     page = tc.get("/").text
     assert "sonarr.makooy.nl" in page and "unused DNS" in page
 
-    r = tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_dns_ids": "dns1"},
+    r = post(tc, "/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_dns_ids": "dns1"},
                 follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
     assert not [d for d in STATE["dns"] if d["name"] == "sonarr.makooy.nl"]
@@ -275,7 +334,7 @@ def test_edit_keeps_settings_this_tool_does_not_manage():
     carried over instead of silently falling back to the defaults."""
     reset_state()
     login()
-    r = tc.post("/edit", data={
+    r = post(tc, "/edit", data={
         "original_hostname": "sonarr.makooy.nl", "original_path": "",
         "hostname": "series.makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.9", "origin_port": "8989",
@@ -301,7 +360,7 @@ def test_adding_a_hostname_that_already_has_a_route_is_refused():
     reset_state()
     login()
     before = list(STATE["config"]["ingress"])
-    r = tc.post("/new", data={
+    r = post(tc, "/new", data={
         "hostname": "sonarr", "zone": "makooy.nl", "scheme": "http",
         "origin_host": "10.0.0.1", "origin_port": "1234",
     }, follow_redirects=False)
@@ -313,7 +372,7 @@ def test_adding_a_hostname_that_already_has_a_route_is_refused():
 def test_renaming_onto_an_existing_hostname_is_refused():
     reset_state()
     login()
-    r = tc.post("/edit", data={
+    r = post(tc, "/edit", data={
         "original_hostname": "ha.makooy.nl", "original_path": "",
         "hostname": "sonarr.makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.12", "origin_port": "8123",
@@ -333,7 +392,7 @@ def test_edit_and_delete_target_the_exact_path():
     r = tc.get("/edit?h=ha.makooy.nl&p=/api")
     assert "9000" in r.text and "8123" not in r.text, "the /api rule is the one being edited"
 
-    r = tc.post("/delete", data={"hostname": "ha.makooy.nl", "path": "/api", "del_route": "1"},
+    r = post(tc, "/delete", data={"hostname": "ha.makooy.nl", "path": "/api", "del_route": "1"},
                 follow_redirects=False)
     assert "err=" not in r.headers["location"], r.headers["location"]
     assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl", "/api") is None
@@ -349,9 +408,9 @@ def test_restore_keeps_every_setting_in_the_backup():
     login()
     data = tc.get("/backup/export").json()
     STATE["apps"] = []
-    r = tc.post("/backup/preview", files={"backup": ("b.json", json.dumps(data), "application/json")})
+    r = post(tc, "/backup/preview", files={"backup": ("b.json", json.dumps(data), "application/json")})
     token = r.text.split('name="token" value="')[1].split('"')[0]
-    r = tc.post("/backup/apply", data={"token": token, "restore_apps": "1"},
+    r = post(tc, "/backup/apply", data={"token": token, "restore_apps": "1"},
                 follow_redirects=False)
     assert "err=" not in r.headers["location"], r.headers["location"]
 
@@ -371,7 +430,7 @@ def test_deleting_an_app_asks_first():
         "origin_host": "192.168.1.9", "origin_port": "8989",
         "policies": ["pol1", "pol2"], "noTLSVerify": "1",
     }  # note: no create_app, so the Access app would be deleted
-    r = tc.post("/edit", data=data)
+    r = post(tc, "/edit", data=data)
     assert r.status_code == 200 and "Are you sure?" in r.text
     assert "without any authentication" in r.text
     # the whole submission is carried through, including multi-value fields
@@ -380,7 +439,7 @@ def test_deleting_an_app_asks_first():
     assert 'name="noTLSVerify" value="1"' in r.text
     assert [a for a in STATE["apps"] if a["id"] == "app1"], "app still there"
 
-    r = tc.post("/edit", data={**data, "confirmed": "1"}, follow_redirects=False)
+    r = post(tc, "/edit", data={**data, "confirmed": "1"}, follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
     assert not [a for a in STATE["apps"] if a["id"] == "app1"], "deleted after confirming"
 
@@ -394,13 +453,13 @@ def test_removing_every_policy_asks_first():
         "origin_host": "192.168.1.9", "origin_port": "8989",
         "create_app": "1", "app_name": "Sonarr", "session_duration": "24h",
     }  # no policies selected
-    r = tc.post("/edit", data=data)
+    r = post(tc, "/edit", data=data)
     assert r.status_code == 200 and "Are you sure?" in r.text
     assert "denies everyone" in r.text
     app = [a for a in STATE["apps"] if a["id"] == "app1"][0]
     assert [p["id"] for p in app["policies"]] == ["pol1"], "policies untouched"
 
-    r = tc.post("/edit", data={**data, "confirmed": "1"}, follow_redirects=False)
+    r = post(tc, "/edit", data={**data, "confirmed": "1"}, follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"]
     app = [a for a in STATE["apps"] if a["id"] == "app1"][0]
     assert app["policies"] == []
@@ -416,7 +475,7 @@ def test_only_the_ticked_dns_records_are_deleted():
     assert "192.168.1.77" in page and "cfargotunnel.com" in page, "both records are shown"
     assert "does not point at the tunnel" in page
 
-    r = tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "",
+    r = post(tc, "/delete", data={"hostname": "sonarr.makooy.nl", "path": "",
                                  "del_dns_ids": "dns1"}, follow_redirects=False)
     assert "err=" not in r.headers["location"], r.headers["location"]
     left = [d["id"] for d in STATE["dns"] if d["name"] == "sonarr.makooy.nl"]
@@ -442,7 +501,7 @@ def test_abandoned_restore_uploads_are_cleaned_up():
 def test_delete_everything():
     reset_state()
     login()
-    r = tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "",
+    r = post(tc, "/delete", data={"hostname": "sonarr.makooy.nl", "path": "",
                                  "del_route": "1", "del_app": "1", "del_dns_ids": "dns1"},
                 follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
@@ -461,13 +520,102 @@ def test_backup_roundtrip():
 
     STATE["config"] = cf.remove_rule(STATE["config"], "ha.makooy.nl")
     assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl") is None
-    r = tc.post("/backup/preview", files={"backup": ("b.json", json.dumps(data), "application/json")})
+    r = post(tc, "/backup/preview", files={"backup": ("b.json", json.dumps(data), "application/json")})
     assert r.status_code == 200 and "ha.makooy.nl" in r.text
     token = r.text.split('name="token" value="')[1].split('"')[0]
-    r = tc.post("/backup/apply", data={"token": token, "restore_routes": "1", "restore_apps": "1"},
+    r = post(tc, "/backup/apply", data={"token": token, "restore_routes": "1", "restore_apps": "1"},
                 follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
     assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl") is not None
+
+
+def test_non_self_hosted_apps_are_listed_but_not_editable():
+    reset_state()
+    login()
+    page = tc.get("/").text
+    assert "workspace.makooy.nl" in page, "a SaaS app is still shown"
+    assert "saas" in page and "not editable here" in page
+
+    r = tc.get("/edit?h=workspace.makooy.nl&p=", follow_redirects=False)
+    assert r.status_code == 303 and "err=" in r.headers["location"]
+    assert "saas+application" in r.headers["location"]
+
+    # a self-hosted one is of course still editable
+    r = tc.get("/edit?h=sonarr.makooy.nl&p=")
+    assert r.status_code == 200
+
+
+def test_an_app_covering_several_hostnames_is_matched_on_all_of_them():
+    reset_state()
+    # a tunnel route for the second hostname of the Books application
+    STATE["config"]["ingress"].insert(0, {"hostname": "calibre.makooy.nl",
+                                          "service": "http://192.168.1.9:8090"})
+    login()
+    rows, _ = __import__("asyncio").run(_overview())
+    by_host = {r.hostname: r for r in rows}
+    assert by_host["calibre.makooy.nl"].app_name == "Books", \
+        "matched through destinations, not just domain"
+    assert by_host["calibre.makooy.nl"].other_hostnames == ["readarr.makooy.nl"]
+    assert len([r for r in rows if r.app_name == "Books"]) == 1, "no duplicate row for one app"
+
+
+async def _overview():
+    main.reset_client()
+    services.invalidate_overview()
+    return await main.manager().load_overview()
+
+
+def test_route_order_can_be_changed():
+    reset_state()
+    login()
+    page = tc.get("/routes").text
+    assert "ha.makooy.nl" in page and "always last" in page
+
+    before = [r.get("hostname") for r in STATE["config"]["ingress"] if r.get("hostname")]
+    r = post(tc, "/routes/move", data={"index": "1", "direction": "up"}, follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    after = [r.get("hostname") for r in STATE["config"]["ingress"] if r.get("hostname")]
+    assert after[0] == before[1] and after[1] == before[0], "the two swapped"
+    assert cf.is_catch_all(STATE["config"]["ingress"][-1]), "catch-all still last"
+
+    r = post(tc, "/routes/move", data={"index": "0", "direction": "up"}, follow_redirects=False)
+    assert "err=" in r.headers["location"], "cannot move the first one up"
+
+
+def test_backup_contains_dns_and_can_put_it_back():
+    reset_state()
+    login()
+    data = tc.get("/backup/export").json()
+    zones = data["dns_zones"]
+    assert zones and zones[0]["zone_name"] == "makooy.nl"
+    assert any(r["name"] == "sonarr.makooy.nl" for r in zones[0]["records"])
+
+    # the record disappears, a restore brings it back
+    STATE["dns"] = [d for d in STATE["dns"] if d["name"] != "sonarr.makooy.nl"]
+    r = post(tc, "/backup/preview",
+             files={"backup": ("b.json", json.dumps(data), "application/json")})
+    assert r.status_code == 200 and "Missing DNS records" in r.text
+    token = r.text.split('name="token" value="')[1].split('"')[0]
+    r = post(tc, "/backup/apply", data={"token": token, "restore_dns": "1"},
+             follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    assert any(d["name"] == "sonarr.makooy.nl" for d in STATE["dns"])
+
+
+def test_restore_never_overwrites_an_existing_dns_record():
+    reset_state()
+    login()
+    data = tc.get("/backup/export").json()
+    for record in STATE["dns"]:
+        if record["name"] == "sonarr.makooy.nl":
+            record["content"] = "192.168.1.250"
+            record["type"] = "A"
+    r = post(tc, "/backup/preview",
+             files={"backup": ("b.json", json.dumps(data), "application/json")})
+    token = r.text.split('name="token" value="')[1].split('"')[0]
+    post(tc, "/backup/apply", data={"token": token, "restore_dns": "1"}, follow_redirects=False)
+    kept = [d for d in STATE["dns"] if d["name"] == "sonarr.makooy.nl"]
+    assert len(kept) == 1 and kept[0]["content"] == "192.168.1.250", "left exactly as it was"
 
 
 # ------------------------------------------------------- export & backups ---
@@ -506,21 +654,21 @@ def test_stored_backup_roundtrip():
     for item in backups.listing():
         backups.remove(item["name"])
 
-    r = tc.post("/backup/create", follow_redirects=False)
+    r = post(tc, "/backup/create", follow_redirects=False)
     assert "err=" not in r.headers["location"], r.headers["location"]
     stored = backups.listing()
     assert len(stored) == 1 and stored[0]["kind"] == "manual"
-    assert stored[0]["routes"] == 2 and stored[0]["apps"] == 1
+    assert stored[0]["routes"] == 2 and stored[0]["apps"] == len(STATE["apps"])
 
     page = tc.get("/backup").text
     assert stored[0]["when"] in page and "by hand" in page
 
     # restoring a stored backup goes through the same diff screen
     STATE["config"] = cf.remove_rule(STATE["config"], "ha.makooy.nl")
-    r = tc.post("/backup/stored", data={"name": stored[0]["name"]})
+    r = post(tc, "/backup/stored", data={"name": stored[0]["name"]})
     assert r.status_code == 200 and "ha.makooy.nl" in r.text
     token = r.text.split('name="token" value="')[1].split('"')[0]
-    r = tc.post("/backup/apply", data={"token": token, "restore_routes": "1"},
+    r = post(tc, "/backup/apply", data={"token": token, "restore_routes": "1"},
                 follow_redirects=False)
     assert "err=" not in r.headers["location"], r.headers["location"]
     assert cf.find_rule(STATE["config"]["ingress"], "ha.makooy.nl")
@@ -528,7 +676,7 @@ def test_stored_backup_roundtrip():
     r = tc.get(f"/backup/download?name={stored[0]['name']}")
     assert r.status_code == 200 and r.json()["format"] == backups.FORMAT
 
-    r = tc.post("/backup/remove", data={"name": stored[0]["name"]}, follow_redirects=False)
+    r = post(tc, "/backup/remove", data={"name": stored[0]["name"]}, follow_redirects=False)
     assert "err=" not in r.headers["location"]
     assert backups.listing() == []
 
@@ -548,7 +696,7 @@ def test_backup_is_written_before_a_delete():
     for item in backups.listing():
         backups.remove(item["name"])
 
-    r = tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_route": "1"},
+    r = post(tc, "/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_route": "1"},
                 follow_redirects=False)
     assert "err=" not in r.headers["location"], r.headers["location"]
     stored = backups.listing()
@@ -566,15 +714,15 @@ def test_backup_before_delete_can_be_switched_off():
     login()
     for item in backups.listing():
         backups.remove(item["name"])
-    tc.post("/settings/backups", data={"auto_backup": "1", "auto_backup_hours": "24",
+    post(tc, "/settings/backups", data={"auto_backup": "1", "auto_backup_hours": "24",
                                        "backup_keep": "14"}, follow_redirects=False)
     assert settings.backup_before_delete is False
 
-    tc.post("/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_route": "1"},
+    post(tc, "/delete", data={"hostname": "sonarr.makooy.nl", "path": "", "del_route": "1"},
             follow_redirects=False)
     assert backups.listing() == [], "no backup when the option is off"
 
-    tc.post("/settings/backups", data={"auto_backup": "1", "auto_backup_hours": "24",
+    post(tc, "/settings/backups", data={"auto_backup": "1", "auto_backup_hours": "24",
                                        "backup_keep": "14", "backup_before_delete": "1"},
             follow_redirects=False)
     assert settings.backup_before_delete is True
@@ -592,14 +740,14 @@ def test_a_failed_predelete_backup_asks_before_continuing(monkeypatch):
     monkeypatch.setattr(main, "collect_backup", broken)
     data = {"hostname": "sonarr.makooy.nl", "path": "", "del_route": "1", "del_app": "1"}
 
-    r = tc.post("/delete", data=data)
+    r = post(tc, "/delete", data=data)
     assert r.status_code == 200, "a failed backup must not delete anything yet"
     assert "did not work" in r.text and "Cloudflare is unreachable" in r.text
     assert "Delete without a backup" in r.text
     assert cf.find_rule(STATE["config"]["ingress"], "sonarr.makooy.nl"), "route untouched"
     assert [a for a in STATE["apps"] if a["id"] == "app1"], "app untouched"
 
-    r = tc.post("/delete", data={**data, "confirmed": "1"}, follow_redirects=False)
+    r = post(tc, "/delete", data={**data, "confirmed": "1"}, follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
     assert "backup+failed" in r.headers["location"], "the result says the backup was skipped"
     assert cf.find_rule(STATE["config"]["ingress"], "sonarr.makooy.nl") is None
@@ -611,7 +759,7 @@ def test_backups_from_before_the_rename_still_restore():
     data = tc.get("/backup/export").json()
     assert data["format"] == "cf0t-manager/1"
     legacy = dict(data, format="cfzerotrustcontrol/1")
-    r = tc.post("/backup/preview",
+    r = post(tc, "/backup/preview",
                 files={"backup": ("old.json", json.dumps(legacy), "application/json")})
     assert r.status_code == 200 and "Check this before restoring" in r.text
 
@@ -670,7 +818,7 @@ def test_existing_dns_record_is_never_overwritten_silently():
     STATE["dns"].append({"id": "dns9", "type": "A", "name": "nas.makooy.nl",
                          "content": "192.168.1.50", "proxied": False})
     login()
-    r = tc.post("/new", data={
+    r = post(tc, "/new", data={
         "hostname": "nas", "zone": "makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.9", "origin_port": "5000", "create_dns": "1",
     }, follow_redirects=False)
@@ -687,7 +835,7 @@ def test_dns_record_is_overwritten_once_confirmed():
     STATE["dns"].append({"id": "dns9", "type": "A", "name": "nas.makooy.nl",
                          "content": "192.168.1.50", "proxied": False})
     login()
-    r = tc.post("/dns/overwrite", data={"hostname": "nas.makooy.nl"}, follow_redirects=False)
+    r = post(tc, "/dns/overwrite", data={"hostname": "nas.makooy.nl"}, follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
     record = [d for d in STATE["dns"] if d["name"] == "nas.makooy.nl"][0]
     assert record["type"] == "CNAME"

@@ -64,6 +64,26 @@ class ServiceRow:
         return (self.app or {}).get("name", "")
 
     @property
+    def app_type(self) -> str:
+        return (self.app or {}).get("type", "") or ""
+
+    @property
+    def is_self_hosted(self) -> bool:
+        return not self.app or self.app_type == SELF_HOSTED
+
+    @property
+    def editable(self) -> bool:
+        """SaaS, infrastructure and the rest are not tunnel-backed, so the
+        origin form does not apply to them."""
+        return self.has_route or self.is_self_hosted
+
+    @property
+    def other_hostnames(self) -> list[str]:
+        if not self.app:
+            return []
+        return [h for h, _ in app_hostnames(self.app) if h != self.hostname]
+
+    @property
     def policies(self) -> list[dict]:
         return (self.app or {}).get("policies") or []
 
@@ -78,6 +98,29 @@ class ServiceRow:
     @property
     def dns_ok(self) -> bool:
         return self.dns is not None
+
+
+SELF_HOSTED = "self_hosted"
+
+
+def app_hostnames(app: dict) -> list[tuple[str, str]]:
+    """Every public hostname an application covers: its domain plus the extra
+    entries in destinations, which is where a second hostname ends up."""
+    found = [normalize_domain(app.get("domain") or "")]
+    for dest in app.get("destinations") or []:
+        if not isinstance(dest, dict):
+            continue
+        if (dest.get("type") or "public") != "public":
+            continue
+        uri = dest.get("uri") or ""
+        if uri:
+            found.append(normalize_domain(uri))
+    seen, out = set(), []
+    for host, path in found:
+        if host and (host, path) not in seen:
+            seen.add((host, path))
+            out.append((host, path))
+    return out
 
 
 def normalize_domain(value: str) -> tuple[str, str]:
@@ -220,9 +263,8 @@ class ZeroTrustManager:
 
         apps_by_domain: dict[tuple[str, str], dict] = {}
         for app in apps:
-            host, path = normalize_domain(app.get("domain") or "")
-            if host:
-                apps_by_domain[(host, path)] = app
+            for key in app_hostnames(app):
+                apps_by_domain.setdefault(key, app)
 
         rows: list[ServiceRow] = []
         matched_app_ids: set[str] = set()
@@ -240,7 +282,9 @@ class ZeroTrustManager:
         for (host, path), app in apps_by_domain.items():
             if app.get("id") in matched_app_ids:
                 continue
-            rows.append(ServiceRow(hostname=host, path=path, rule=None, app=app))
+            matched_app_ids.add(app.get("id"))  # one row per app, on its own domain
+            primary = app_hostnames(app)[0] if app_hostnames(app) else (host, path)
+            rows.append(ServiceRow(hostname=primary[0], path=primary[1], rule=None, app=app))
 
         meta: dict[str, Any] = {"config": config, "apps": apps, "zones": zones,
                                 "dns_error": dns_error or None}
@@ -404,6 +448,49 @@ class ZeroTrustManager:
         })
         invalidate_overview(self.tunnel_id)
         return "DNS CNAME created."
+
+    async def dns_snapshot(self, zones: list[dict]) -> list[dict]:
+        """Address records per zone, so a backup can put DNS back too."""
+        per_zone = await asyncio.gather(
+            *(self.cf.list_dns_records(zone["id"]) for zone in zones)
+        )
+        out = []
+        for zone, records in zip(zones, per_zone):
+            kept = [{k: r.get(k) for k in ("id", "type", "name", "content", "proxied", "ttl")}
+                    for r in records if r.get("type") in {"CNAME", "A", "AAAA"}]
+            out.append({"zone_id": zone["id"], "zone_name": zone.get("name", ""),
+                        "records": kept})
+        return out
+
+    async def restore_dns(self, snapshot: list[dict]) -> tuple[int, int]:
+        """Recreate records that are gone. Existing names are left alone, the
+        same rule the rest of the tool follows for DNS."""
+        created = skipped = 0
+        for zone in snapshot:
+            zone_id = zone.get("zone_id")
+            if not zone_id:
+                continue
+            try:
+                present = {(r.get("name") or "").lower()
+                           for r in await self.cf.list_dns_records(zone_id)}
+            except CloudflareError:
+                continue
+            for record in zone.get("records") or []:
+                name = (record.get("name") or "").lower()
+                if not name or name in present:
+                    skipped += 1
+                    continue
+                await self.cf.create_dns_record(zone_id, {
+                    "type": record.get("type", "CNAME"),
+                    "name": record.get("name"),
+                    "content": record.get("content"),
+                    "proxied": bool(record.get("proxied")),
+                })
+                present.add(name)
+                created += 1
+        if created:
+            invalidate_overview(self.tunnel_id)
+        return created, skipped
 
     async def dns_records_for(self, hostname: str, zones: list[dict]) -> list[dict]:
         """Every address record on this hostname, so the delete screen can show

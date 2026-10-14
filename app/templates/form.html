@@ -6,6 +6,7 @@
 <p class="sub">Tunnel route, Access application and policy are set in one go.</p>
 
 <form method="post" action="{{ '/new' if mode == 'new' else '/edit' }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 {% if mode == 'edit' %}
   <input type="hidden" name="original_hostname" value="{{ row.hostname }}">
   <input type="hidden" name="original_path" value="{{ row.path }}">

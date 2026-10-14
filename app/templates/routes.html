@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% set active_page = 'index' %}
+{% block content %}
+<h1>Route order</h1>
+<p class="sub">cloudflared takes the <strong>first</strong> rule that matches a request. The order
+only matters when rules overlap — the same hostname with different paths, for instance. Put the
+most specific one above the general one.</p>
+
+<div class="panel">
+  {% if rules %}
+  <table>
+    <thead>
+      <tr><th style="width:60px">#</th><th>Hostname</th><th>Path</th><th>Origin / service</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for rule in rules %}
+      <tr>
+        <td class="hint">{{ loop.index }}</td>
+        <td>{{ rule.hostname }}</td>
+        <td class="mono">{{ rule.path or '*' }}</td>
+        <td class="mono">{{ rule.service }}</td>
+        <td class="actions">
+          <form method="post" action="/routes/move" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="index" value="{{ loop.index0 }}">
+            <input type="hidden" name="direction" value="up">
+            <button class="btn small" {% if loop.first %}disabled{% endif %} title="Move up">↑</button>
+          </form>
+          <form method="post" action="/routes/move" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="index" value="{{ loop.index0 }}">
+            <input type="hidden" name="direction" value="down">
+            <button class="btn small" {% if loop.last %}disabled{% endif %} title="Move down">↓</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+      <tr>
+        <td class="hint">—</td>
+        <td colspan="2" class="hint">anything else</td>
+        <td class="mono">{{ catch_all.service }}</td>
+        <td class="actions"><span class="badge off">always last</span></td>
+      </tr>
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No routes on this tunnel yet.</div>
+  {% endif %}
+</div>
+
+<p class="hint"><a href="/">← Back to applications</a></p>
+{% endblock %}

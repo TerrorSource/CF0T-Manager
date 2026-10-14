@@ -30,6 +30,7 @@
     <p class="hint">The old value is not kept anywhere — note it down if you might need it.</p>
 
     <form method="post" action="/dns/overwrite" style="margin-top:18px">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="hostname" value="{{ conflict.hostname }}">
       <div class="form-actions">
         <button class="btn danger" type="submit">Overwrite the record</button>

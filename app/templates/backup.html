@@ -7,10 +7,10 @@
 <div class="panel">
   <div class="panel-head">Export</div>
   <div class="panel-body">
-    <p class="hint" style="margin-top:0">Every ingress rule on the tunnel, all Access applications and the reusable policies.</p>
+    <p class="hint" style="margin-top:0">Every ingress rule on the tunnel, all Access applications, the reusable policies and your address records per zone.</p>
     <div class="form-actions" style="margin-top:0">
       <a class="btn primary" href="/backup/export">Download now</a>
-      <form method="post" action="/backup/create"><button class="btn">Store one in /data</button></form>
+      <form method="post" action="/backup/create"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn">Store one in /data</button></form>
     </div>
   </div>
 </div>
@@ -34,16 +34,18 @@
             {% if item.reason %}<div class="hint">{{ item.reason }}</div>{% endif %}
           </td>
           <td class="hint">
-            {% if item.routes is not none %}{{ item.routes }} routes · {{ item.apps }} apps{% else %}unreadable{% endif %}
+            {% if item.routes is not none %}{{ item.routes }} routes · {{ item.apps }} apps{% if item.dns %} · {{ item.dns }} dns{% endif %}{% else %}unreadable{% endif %}
           </td>
           <td class="hint">{{ item.size_kb }} kB</td>
           <td class="actions">
             <form method="post" action="/backup/stored" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <input type="hidden" name="name" value="{{ item.name }}">
               <button class="btn small">Restore</button>
             </form>
             <a class="btn small" href="/backup/download?name={{ item.name }}">Download</a>
             <form method="post" action="/backup/remove" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <input type="hidden" name="name" value="{{ item.name }}">
               <button class="btn small danger">Delete</button>
             </form>
@@ -69,11 +71,14 @@
       <dd>{% if preview.routes_new %}<div class="badges">{% for h in preview.routes_new %}<span class="badge ok">{{ h }}</span>{% endfor %}</div>{% else %}none{% endif %}</dd>
       <dt>Will disappear</dt>
       <dd>{% if preview.routes_removed %}<div class="badges">{% for h in preview.routes_removed %}<span class="badge warn">{{ h }}</span>{% endfor %}</div>{% else %}none{% endif %}</dd>
+      <dt>Missing DNS records</dt>
+      <dd>{{ preview.missing_dns }}</dd>
       <dt>Missing Access apps</dt>
       <dd>{% if preview.missing_apps %}<div class="badges">{% for a in preview.missing_apps %}<span class="badge">{{ a.name }}</span>{% endfor %}</div>{% else %}none{% endif %}</dd>
     </dl>
 
     <form method="post" action="/backup/apply" style="margin-top:20px">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="token" value="{{ preview.token }}">
       <div class="check">
         <input type="checkbox" id="restore_routes" name="restore_routes" value="1" checked>
@@ -82,6 +87,11 @@
       <div class="check">
         <input type="checkbox" id="restore_apps" name="restore_apps" value="1">
         <label for="restore_apps">Recreate missing Access apps <span class="hint">(existing apps are left alone)</span></label>
+      </div>
+      <div class="check">
+        <input type="checkbox" id="restore_dns" name="restore_dns" value="1">
+        <label for="restore_dns">Recreate missing DNS records
+          <span class="hint">(records that still exist are never changed)</span></label>
       </div>
       <div class="form-actions">
         <button class="btn danger" type="submit">Run restore</button>
@@ -95,6 +105,7 @@
   <div class="panel-head">Restore</div>
   <div class="panel-body">
     <form method="post" action="/backup/preview" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="field">
         <label for="backup">Backup file from your own machine (.json)</label>
         <input type="file" id="backup" name="backup" accept="application/json,.json" required>

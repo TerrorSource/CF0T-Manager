@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import asyncio
+import hmac
 import logging
 import secrets
 import time
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, Form, Request, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -23,7 +24,11 @@ from .cf import CloudflareClient, CloudflareError
 from .config import active_tunnel_id, set_active_tunnel_id, settings
 from .services import ZeroTrustManager
 
-logger = logging.getLogger("cfzt")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:     %(message)s",  # lines up with uvicorn's own output
+)
+logger = logging.getLogger("cf0t")
 BASE_DIR = Path(__file__).resolve().parent
 OPEN_PATHS = {"/healthz", "/favicon.ico"}
 
@@ -41,8 +46,13 @@ async def collect_backup(reason: str) -> dict:
         client().list_access_apps(),
         client().list_policies(),
     )
+    try:
+        dns = await mgr.dns_snapshot(await client().list_zones())
+    except CloudflareError as exc:
+        logger.warning("backup without DNS records: %s", exc)
+        dns = []
     return backups.build_payload(mgr.tunnel_id, tunnel.get("name", ""), config, apps,
-                                 policies, reason)
+                                 policies, reason, dns)
 
 
 async def store_backup(kind: str, reason: str, label: str = "") -> tuple[str, str]:
@@ -110,9 +120,7 @@ async def lifespan(app: FastAPI):
             await stale.aclose()
 
 
-app = FastAPI(title="CF0T-Manager", lifespan=lifespan,
-              docs_url=None, redoc_url=None, openapi_url=None)
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+CSRF_COOKIE = "cf0t_csrf"
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
@@ -163,6 +171,11 @@ DATA_UNWRITABLE = ("Could not write to the /data volume: {error}. "
                    "by the user the container runs as (uid 1000).")
 
 
+def client_ip(request: Request) -> str:
+    """With --proxy-headers uvicorn has already resolved X-Forwarded-For."""
+    return request.client.host if request.client else "unknown"
+
+
 def save_settings(**values) -> str:
     """Store settings, returning an error message instead of failing silently."""
     try:
@@ -184,7 +197,31 @@ def render(request: Request, template: str, **ctx) -> HTMLResponse:
     ctx.setdefault("err_msg", request.query_params.get("err", ""))
     ctx.setdefault("settings", settings)
     ctx.setdefault("tunnel_id", active_tunnel_id())
-    return templates.TemplateResponse(request, template, ctx)
+
+    token = request.cookies.get(CSRF_COOKIE) or secrets.token_hex(16)
+    ctx["csrf_token"] = token
+    response = templates.TemplateResponse(request, template, ctx)
+    response.set_cookie(CSRF_COOKIE, token, httponly=True, samesite="lax",
+                        secure=settings.secure_cookie, path="/")
+    return response
+
+
+async def csrf_guard(request: Request) -> None:
+    """Every POST must echo the cookie back in the form. Blocks another site
+    from submitting to this one with your session attached."""
+    if request.method != "POST":
+        return
+    cookie = request.cookies.get(CSRF_COOKIE, "")
+    form = await request.form()  # cached, so the route can read it again
+    sent = str(form.get("csrf_token") or "")
+    if not cookie or not hmac.compare_digest(cookie, sent):
+        raise HTTPException(status_code=400,
+                            detail="This form expired. Go back, reload the page and try again.")
+
+
+app = FastAPI(title="CF0T-Manager", lifespan=lifespan, docs_url=None, redoc_url=None,
+              openapi_url=None, dependencies=[Depends(csrf_guard)])
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 
 @app.middleware("http")
@@ -225,9 +262,20 @@ async def login_form(request: Request):
 
 @app.post("/login")
 async def login(request: Request, password: str = Form("")):
+    who = client_ip(request)
+    blocked_for = auth.lockout_remaining(who)
+    if blocked_for:
+        return redirect("/login", err=f"Too many attempts. Try again in {blocked_for}.")
+
     if not auth.check_password(password):
-        time.sleep(0.5)
-        return redirect("/login", err="Wrong password.")
+        await asyncio.sleep(0.5)  # never time.sleep here: it blocks every request
+        left = auth.register_failure(who)
+        if left:
+            return redirect("/login", err=f"Wrong password. {left} attempts left.")
+        return redirect("/login",
+                        err=f"Too many attempts. Try again in {auth.lockout_remaining(who)}.")
+
+    auth.register_success(who)
     response = RedirectResponse("/", status_code=303)
     auth.set_session_cookie(response, auth.make_token())
     return response
@@ -433,7 +481,8 @@ def destructive_warnings(form, row=None) -> list[str]:
 
 def confirmation_page(request: Request, action: str, form, warnings: list[str],
                       confirm_label: str = "Yes, apply it") -> HTMLResponse:
-    fields = [(k, v) for k, v in form.multi_items() if k != "confirmed"]
+    fields = [(k, v) for k, v in form.multi_items()
+              if k not in {"confirmed", "csrf_token"}]
     return render(request, "confirm.html", action=action, fields=fields, warnings=warnings,
                   confirm_label=confirm_label)
 
@@ -585,6 +634,10 @@ async def edit_form(request: Request):
         return redirect("/", err=str(exc))
     if row is None:
         return redirect("/", err=f"{hostname} not found.")
+    if not row.editable:
+        return redirect("/", err=f"{row.hostname} is a {row.app_type.replace('_', ' ')} "
+                               f"application with no tunnel route, so there is nothing to "
+                               f"edit here. Change it in the Cloudflare dashboard.")
 
     origin = (row.rule or {}).get("originRequest") or {}
     parsed = services.parse_service_url(row.service)
@@ -743,6 +796,45 @@ async def dns_overwrite(request: Request, hostname: str = Form("")):
     return redirect("/", ok=f"{hostname}: {message.lower()}")
 
 
+# ----------------------------------------------------------- route order ---
+@app.get("/routes", response_class=HTMLResponse)
+async def routes_order(request: Request):
+    try:
+        config = await client().get_tunnel_config(manager().tunnel_id)
+    except CloudflareError as exc:
+        return redirect("/", err=str(exc))
+    rules, catch_all = cf.split_ingress(config.get("ingress") or [])
+    return render(request, "routes.html", rules=rules, catch_all=catch_all)
+
+
+@app.post("/routes/move")
+async def routes_move(request: Request, index: str = Form(""), direction: str = Form("")):
+    mgr = manager()
+    try:
+        position = int(index)
+    except ValueError:
+        return redirect("/routes", err="Could not tell which route to move.")
+
+    try:
+        config = await client().get_tunnel_config(mgr.tunnel_id)
+        rules, _ = cf.split_ingress(config.get("ingress") or [])
+        target = position - 1 if direction == "up" else position + 1
+        if not (0 <= position < len(rules) and 0 <= target < len(rules)):
+            return redirect("/routes", err="That route is already at the end.")
+
+        order = [cf.rule_key(r.get("hostname"), r.get("path")) for r in rules]
+        order[position], order[target] = order[target], order[position]
+        config = cf.reorder_rules(config, order)
+        await client().put_tunnel_config(mgr.tunnel_id, config)
+        services.invalidate_overview(mgr.tunnel_id)
+    except CloudflareError as exc:
+        return redirect("/routes", err=str(exc))
+
+    moved = rules[position]
+    return redirect("/routes", ok=f"Moved {moved.get('hostname')}{moved.get('path') or ''} "
+                                  f"{direction}.")
+
+
 # ---------------------------------------------------------------- backup ---
 @app.get("/backup", response_class=HTMLResponse)
 async def backup_page(request: Request):
@@ -839,8 +931,21 @@ async def render_restore_preview(request: Request, data: dict):
         json.dumps(data), encoding="utf-8"
     )
 
+    missing_dns = 0
+    try:
+        for zone in data.get("dns_zones") or []:
+            if not zone.get("zone_id"):
+                continue
+            present = {(r.get("name") or "").lower()
+                       for r in await client().list_dns_records(zone["zone_id"])}
+            missing_dns += sum(1 for r in zone.get("records") or []
+                               if (r.get("name") or "").lower() not in present)
+    except CloudflareError:
+        missing_dns = 0
+
     preview = {
         "token": token,
+        "missing_dns": missing_dns,
         "tunnel_name": (data.get("tunnel") or {}).get("name"),
         "exported_at": data.get("exported_at"),
         "routes_total": len(backup_rules),
@@ -853,7 +958,7 @@ async def render_restore_preview(request: Request, data: dict):
 
 @app.post("/backup/apply")
 async def backup_apply(request: Request, token: str = Form(""), restore_routes: str = Form(""),
-                       restore_apps: str = Form("")):
+                       restore_apps: str = Form(""), restore_dns: str = Form("")):
     path = settings.data_dir / f"restore-{Path(token).name}.json"
     if not token or not path.exists():
         return redirect("/backup", err="Upload expired, please try again.")
@@ -881,6 +986,10 @@ async def backup_apply(request: Request, token: str = Form(""), restore_routes: 
                 await mgr.recreate_app(app_def)
                 created += 1
             steps.append(f"created {created} Access app(s)")
+        if restore_dns:
+            created, skipped = await mgr.restore_dns(data.get("dns_zones") or [])
+            steps.append(f"created {created} DNS record(s)"
+                         + (f", left {skipped} existing one(s) alone" if skipped else ""))
     except CloudflareError as exc:
         return redirect("/backup", err=f"{exc} — already done: {', '.join(steps) or 'nothing'}.")
     finally:

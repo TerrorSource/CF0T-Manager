@@ -28,7 +28,8 @@ def backup_dir() -> Path:
 
 
 def build_payload(tunnel_id: str, tunnel_name: str, config: dict, apps: list[dict],
-                  policies: list[dict], reason: str = "manual") -> dict:
+                  policies: list[dict], reason: str = "manual",
+                  dns: list[dict] | None = None) -> dict:
     return {
         "format": FORMAT,
         "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -38,6 +39,7 @@ def build_payload(tunnel_id: str, tunnel_name: str, config: dict, apps: list[dic
         "tunnel_config": config,
         "access_apps": apps,
         "policies": policies,
+        "dns_zones": dns or [],
     }
 
 
@@ -109,6 +111,7 @@ def listing() -> list[dict[str, Any]]:
             "size_kb": max(1, round(stat.st_size / 1024)),
             "routes": None,
             "apps": None,
+            "dns": None,
             "reason": "",
         }
         try:
@@ -116,6 +119,7 @@ def listing() -> list[dict[str, Any]]:
             ingress = (data.get("tunnel_config") or {}).get("ingress") or []
             entry["routes"] = len([r for r in ingress if r.get("hostname")])
             entry["apps"] = len(data.get("access_apps") or [])
+            entry["dns"] = sum(len(z.get("records") or []) for z in data.get("dns_zones") or [])
             entry["reason"] = data.get("reason") or ""
         except (OSError, ValueError):
             pass
