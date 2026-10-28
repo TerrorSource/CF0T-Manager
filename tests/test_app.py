@@ -101,7 +101,7 @@ def handler(request: httpx.Request) -> httpx.Response:
         return ok({"id": aid})
     if path.endswith("/access/identity_providers"):
         return ok([{"id": "idp-google", "name": "Google", "type": "google"},
-                   {"id": "idp-otp", "name": "One-time PIN", "type": "onetimepin"}]
+                   {"id": "idp-otp", "name": "", "type": "onetimepin"}]
                   if page == "1" else [])
     if path.endswith("/access/policies"):
         return ok([{"id": "pol1", "name": "GoogleIDP-Marc-Policy", "decision": "allow"},
@@ -646,6 +646,7 @@ def test_a_new_app_does_not_accept_one_time_pin_by_default():
     assert 'value="idp-google" selected' in page
     assert 'value="idp-otp" selected' not in page, "one-time PIN is not preselected"
     assert "sends a PIN by email" in page
+    assert "One-time PIN — onetimepin" in page, "a nameless provider still reads properly"
 
     r = post(tc, "/new", data={
         "hostname": "vmfleet", "zone": "makooy.nl", "scheme": "http",

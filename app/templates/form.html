@@ -135,7 +135,7 @@
     <select id="allowed_idps" name="allowed_idps" multiple size="{{ [providers|length, 5]|min or 3 }}">
       {% for provider in providers %}
       <option value="{{ provider.id }}" {% if provider.id in selected_idps %}selected{% endif %}>
-        {{ provider.name }} — {{ provider.type }}{% if provider.type == 'onetimepin' %} (sends a PIN by email){% endif %}
+        {{ provider | provider_label }} — {{ provider.type }}{% if provider.type == 'onetimepin' %} (sends a PIN by email){% endif %}
       </option>
       {% endfor %}
     </select>

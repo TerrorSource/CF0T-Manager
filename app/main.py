@@ -129,6 +129,7 @@ async def lifespan(app: FastAPI):
 
 CSRF_COOKIE = "cf0t_csrf"
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+templates.env.filters["provider_label"] = services.provider_label
 
 
 def client() -> CloudflareClient:

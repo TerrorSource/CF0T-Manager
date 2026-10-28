@@ -109,6 +109,14 @@ def is_one_time_pin(provider: dict) -> bool:
     return (provider.get("type") or "") == ONE_TIME_PIN
 
 
+def provider_label(provider: dict) -> str:
+    """Cloudflare hands back the built-in one-time PIN with an empty name."""
+    name = (provider.get("name") or "").strip()
+    if name:
+        return name
+    return "One-time PIN" if is_one_time_pin(provider) else (provider.get("type") or "unnamed")
+
+
 def app_hostnames(app: dict) -> list[tuple[str, str]]:
     """Every public hostname an application covers: its domain plus the extra
     entries in destinations, which is where a second hostname ends up."""
