@@ -109,6 +109,33 @@ through environment variables win and are shown as read-only.</p>
 </div>
 
 <div class="panel">
+  <div class="panel-head">Login methods for new applications</div>
+  <div class="panel-body">
+    {% if providers %}
+    <form method="post" action="/settings/idps">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="default_idps">Preselected on the new-application form</label>
+        <select id="default_idps" name="default_idps" multiple size="{{ [providers|length, 5]|min or 3 }}">
+          {% for provider in providers %}
+          <option value="{{ provider.id }}" {% if provider.id in default_idps %}selected{% endif %}>
+            {{ provider.name }} — {{ provider.type }}{% if provider.type == 'onetimepin' %} (sends a PIN by email){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+        <div class="hint">Select none and new applications start with every provider except
+          one-time PIN. You can still change it per application.</div>
+      </div>
+      <button class="btn primary" type="submit">Save</button>
+    </form>
+    {% else %}
+    <p class="hint">No identity providers readable — the token may be missing
+      <span class="mono">Access: Apps and Policies</span>.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel">
   <div class="panel-head">Backups</div>
   <div class="panel-body">
     <form method="post" action="/settings/backups">

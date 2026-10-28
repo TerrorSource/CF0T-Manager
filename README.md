@@ -18,9 +18,15 @@ For each hostname the tool:
 
 1. adds the **tunnel route**, hostname to origin, keeping the `http_status:404`
    catch-all last where cloudflared expects it,
-2. creates the **Access application** and attaches the policies you picked, in
-   the order you picked them,
+2. creates the **Access application**, attaches the policies you picked in the
+   order you picked them, and limits it to the login methods you chose,
 3. creates the **DNS CNAME** to `<tunnel>.cfargotunnel.com`, proxied.
+
+Login methods matter more than they look: an application that does not name any
+accepts **every** method Cloudflare has configured, one-time PIN included, so
+anyone a policy lets through can sign in with an emailed code. New applications
+therefore start with everything except one-time PIN, and *Settings* holds the
+default if you want another one.
 
 Step 3 is a checkbox: switch it off if you already have a wildcard CNAME. If a
 record is there already and points somewhere else, you get a screen with the old
@@ -41,9 +47,9 @@ Open `http://<your-nas-ip>:8099`. Four tabs:
   matters when rules overlap, for instance the same hostname with different
   paths. Move them up and down here; the catch-all stays last.
 - **New application** — the form above. Subdomain plus a domain dropdown, origin
-  as protocol/host/port, and the advanced origin options cloudflared supports:
-  `noTLSVerify` for a self-signed origin like Proxmox, HTTP/2, host header,
-  connect timeout.
+  as protocol/host/port, which login methods may be used, and the advanced
+  origin options cloudflared supports: `noTLSVerify` for a self-signed origin
+  like Proxmox, HTTP/2, host header, connect timeout.
 - **Backup** — download the whole configuration, or keep copies in `/data`.
   Restoring always shows the difference first.
 - **Changes** — what this tool changed, when, and from which address. Changes
@@ -206,6 +212,8 @@ Python + FastAPI with server-rendered Jinja templates, talking to the Cloudflare
 
 - An application can cover more hostnames than its `domain` field: the rest live
   in `destinations`, which is what the overview matches on as well.
+- An empty `allowed_idps` is not "none", it is "all of them", which is why the
+  create call always sends the list explicitly.
 
 The overview costs four or five calls, so they run in parallel and the result is
 cached for a minute, dropped on every write. Filtering is done in the browser.

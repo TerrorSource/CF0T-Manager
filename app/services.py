@@ -102,6 +102,11 @@ class ServiceRow:
 
 
 SELF_HOSTED = "self_hosted"
+ONE_TIME_PIN = "onetimepin"
+
+
+def is_one_time_pin(provider: dict) -> bool:
+    return (provider.get("type") or "") == ONE_TIME_PIN
 
 
 def app_hostnames(app: dict) -> list[tuple[str, str]]:
@@ -373,13 +378,18 @@ class ZeroTrustManager:
 
     async def create_app(self, name: str, domain: str, policy_ids: list[str],
                          session_duration: str = "24h", launcher_visible: bool = True,
-                         app_type: str = "self_hosted") -> dict:
+                         app_type: str = "self_hosted", allowed_idps: list[str] | None = None,
+                         auto_redirect: bool = False) -> dict:
         payload: dict[str, Any] = {
             "name": name,
             "domain": domain,
             "type": app_type,
             "session_duration": session_duration,
             "app_launcher_visible": launcher_visible,
+            # Left empty, Cloudflare accepts every login method there is,
+            # one-time PIN included. So it is always sent explicitly.
+            "allowed_idps": allowed_idps or [],
+            "auto_redirect_to_identity": auto_redirect,
         }
         if policy_ids:
             payload["policies"] = [
@@ -400,7 +410,9 @@ class ZeroTrustManager:
         return await self.cf.create_access_app(payload)
 
     async def update_app(self, app: dict, name: str, domain: str, policy_ids: list[str],
-                         session_duration: str, launcher_visible: bool) -> dict:
+                         session_duration: str, launcher_visible: bool,
+                         allowed_idps: list[str] | None = None,
+                         auto_redirect: bool = False) -> dict:
         """Updating an Access app is a PUT that replaces the whole object, so
         start from what Cloudflare has and change only our own fields.
         Anything configured elsewhere - identity providers, instant auth,
@@ -414,6 +426,8 @@ class ZeroTrustManager:
             "type": app.get("type") or "self_hosted",
             "session_duration": session_duration,
             "app_launcher_visible": launcher_visible,
+            "allowed_idps": allowed_idps or [],
+            "auto_redirect_to_identity": auto_redirect,
             "policies": [{"id": pid, "precedence": i + 1} for i, pid in enumerate(policy_ids)],
         })
 

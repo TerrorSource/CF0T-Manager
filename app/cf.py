@@ -131,6 +131,9 @@ class CloudflareClient:
     async def delete_access_app(self, app_id: str) -> Any:
         return await self._request("DELETE", f"/accounts/{self.account_id}/access/apps/{app_id}")
 
+    async def list_identity_providers(self) -> list[dict]:
+        return await self._paginated(f"/accounts/{self.account_id}/access/identity_providers")
+
     async def list_policies(self) -> list[dict]:
         return await self._paginated(f"/accounts/{self.account_id}/access/policies")
 

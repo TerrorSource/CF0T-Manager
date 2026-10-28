@@ -122,6 +122,31 @@
     </div>
   </div>
   <div class="field">
+    <label for="allowed_idps">Login methods (ctrl/cmd-click to select more than one)</label>
+    <select id="allowed_idps" name="allowed_idps" multiple size="{{ [providers|length, 5]|min or 3 }}">
+      {% for provider in providers %}
+      <option value="{{ provider.id }}" {% if provider.id in selected_idps %}selected{% endif %}>
+        {{ provider.name }} — {{ provider.type }}{% if provider.type == 'onetimepin' %} (sends a PIN by email){% endif %}
+      </option>
+      {% endfor %}
+    </select>
+    <div class="hint">Only these appear on the Cloudflare Access login page. One-time PIN lets
+      anyone a policy allows in with an emailed code, so leave it out unless you want it.</div>
+  </div>
+  <div class="check">
+    <input type="checkbox" id="accept_all_idps" name="accept_all_idps" value="1"
+           {% if accept_all_idps %}checked{% endif %}>
+    <label for="accept_all_idps">Accept every login method, including one-time PIN
+      <span class="hint">(same as leaving the list empty in the Cloudflare dashboard)</span></label>
+  </div>
+  <div class="check">
+    <input type="checkbox" id="auto_redirect" name="auto_redirect" value="1"
+           {% if f.auto_redirect_to_identity %}checked{% endif %}>
+    <label for="auto_redirect">Skip the picker when only one method is allowed
+      <span class="hint">(Cloudflare calls this instant authentication)</span></label>
+  </div>
+
+  <div class="field">
     <label for="policies">Policies (ctrl/cmd-click to select more than one)</label>
     <select id="policies" name="policies" multiple size="8">
       {% for p in policies %}

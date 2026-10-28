@@ -186,6 +186,12 @@ class Settings:
         return _as_bool(self.store.get("backup_before_delete"), True)
 
     @property
+    def default_idps(self) -> list[str]:
+        """Identity providers preselected on the new-application form."""
+        value = self.store.get("default_idps")
+        return list(value) if isinstance(value, list) else []
+
+    @property
     def session_epoch(self) -> int:
         """Bumped on a password change so existing sessions stop working."""
         return _as_int(self.store.get("session_epoch"), 0)

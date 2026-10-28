@@ -99,6 +99,10 @@ def handler(request: httpx.Request) -> httpx.Response:
         aid = path.rsplit("/", 1)[-1]
         STATE["apps"] = [a for a in STATE["apps"] if a["id"] != aid]
         return ok({"id": aid})
+    if path.endswith("/access/identity_providers"):
+        return ok([{"id": "idp-google", "name": "Google", "type": "google"},
+                   {"id": "idp-otp", "name": "One-time PIN", "type": "onetimepin"}]
+                  if page == "1" else [])
     if path.endswith("/access/policies"):
         return ok([{"id": "pol1", "name": "GoogleIDP-Marc-Policy", "decision": "allow"},
                    {"id": "pol2", "name": "Everyone-Policy", "decision": "allow"}] if page == "1" else [])
@@ -238,6 +242,7 @@ def test_create_full_app():
         "hostname": "jellyfin", "zone": "makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.9", "origin_port": "8096",
         "create_app": "1", "app_name": "Jellyfin", "session_duration": "24h",
+        "allowed_idps": ["idp-google"],
         "policies": ["pol1", "pol2"], "launcher_visible": "1", "create_dns": "1",
     }, follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
@@ -282,6 +287,7 @@ def test_edit_changes_service_and_policies():
         "hostname": "sonarr.makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.9", "origin_port": "9999", "noTLSVerify": "1",
         "create_app": "1", "app_name": "Sonarr", "session_duration": "6h",
+        "allowed_idps": ["idp-google"],
         "policies": ["pol2"], "launcher_visible": "1",
     }, follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
@@ -304,6 +310,7 @@ def test_rename_carries_the_dns_record_over():
         "hostname": "series.makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.9", "origin_port": "8989",
         "create_app": "1", "app_name": "Sonarr", "session_duration": "24h",
+        "allowed_idps": ["idp-google"],
         "policies": ["pol1"], "launcher_visible": "1",
     }, follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
@@ -339,21 +346,24 @@ def test_edit_keeps_settings_this_tool_does_not_manage():
         "hostname": "series.makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.9", "origin_port": "8989",
         "create_app": "1", "app_name": "Series", "session_duration": "6h",
+        "allowed_idps": ["idp-google"],
         "policies": ["pol2"], "launcher_visible": "1",
     }, follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
 
     app = [a for a in STATE["apps"] if a["id"] == "app1"][0]
-    assert app["allowed_idps"] == ["google-idp-id"], "identity provider choice must survive"
-    assert app["auto_redirect_to_identity"] is True, "instant auth must survive"
+    # Login methods and instant auth are the form's own fields now, so they are
+    # whatever was submitted. Everything the form does not know about must
+    # still come through untouched.
+    assert app["allowed_idps"] == ["idp-google"]
     assert app["custom_deny_message"] == "Ask Marc for access"
     assert app["enable_binding_cookie"] is True
+    assert app["destinations"] == [{"type": "public", "uri": "series.makooy.nl"}], \
+        "a rename moves the hostname in destinations too"
     # ...while the fields the tool does manage are updated
     assert app["name"] == "Series" and app["session_duration"] == "6h"
     assert [p["id"] for p in app["policies"]] == ["pol2"]
     assert app["domain"] == "series.makooy.nl"
-    assert app["destinations"] == [{"type": "public", "uri": "series.makooy.nl"}], \
-        "a rename moves the hostname in destinations too"
 
 
 def test_adding_a_hostname_that_already_has_a_route_is_refused():
@@ -452,6 +462,7 @@ def test_removing_every_policy_asks_first():
         "hostname": "sonarr.makooy.nl", "scheme": "http",
         "origin_host": "192.168.1.9", "origin_port": "8989",
         "create_app": "1", "app_name": "Sonarr", "session_duration": "24h",
+        "allowed_idps": ["idp-google"],
     }  # no policies selected
     r = post(tc, "/edit", data=data)
     assert r.status_code == 200 and "Are you sure?" in r.text
@@ -624,6 +635,87 @@ def test_restore_never_overwrites_an_existing_dns_record():
     post(tc, "/backup/apply", data={"token": token, "restore_dns": "1"}, follow_redirects=False)
     kept = [d for d in STATE["dns"] if d["name"] == "sonarr.makooy.nl"]
     assert len(kept) == 1 and kept[0]["content"] == "192.168.1.250", "left exactly as it was"
+
+
+def test_a_new_app_does_not_accept_one_time_pin_by_default():
+    """An empty allowed_idps means Cloudflare accepts every login method, PIN
+    included. The form must always send the choice explicitly."""
+    reset_state()
+    login()
+    page = tc.get("/new").text
+    assert 'value="idp-google" selected' in page
+    assert 'value="idp-otp" selected' not in page, "one-time PIN is not preselected"
+    assert "sends a PIN by email" in page
+
+    r = post(tc, "/new", data={
+        "hostname": "vmfleet", "zone": "makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "8080",
+        "create_app": "1", "app_name": "Vmfleet", "policies": ["pol1"],
+        "allowed_idps": ["idp-google"],
+    }, follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+
+    app = [a for a in STATE["apps"] if a["domain"] == "vmfleet.makooy.nl"][0]
+    assert app["allowed_idps"] == ["idp-google"], "only Google may be used"
+    assert app["auto_redirect_to_identity"] is False
+
+
+def test_accepting_every_method_has_to_be_asked_for():
+    reset_state()
+    login()
+    base = {"hostname": "open", "zone": "makooy.nl", "scheme": "http",
+            "origin_host": "192.168.1.9", "origin_port": "8080",
+            "create_app": "1", "app_name": "Open", "policies": ["pol1"]}
+
+    # nothing picked and the box unticked is a mistake, not "allow everything"
+    r = post(tc, "/new", data=base, follow_redirects=False)
+    assert "err=" in r.headers["location"]
+    assert "at+least+one+identity+provider" in r.headers["location"]
+    assert not [a for a in STATE["apps"] if a["domain"] == "open.makooy.nl"]
+
+    r = post(tc, "/new", data={**base, "accept_all_idps": "1"}, follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    app = [a for a in STATE["apps"] if a["domain"] == "open.makooy.nl"][0]
+    assert app["allowed_idps"] == [], "empty is Cloudflare's way of saying all of them"
+
+
+def test_login_methods_can_be_changed_on_an_existing_app():
+    reset_state()
+    STATE["apps"][0]["allowed_idps"] = []  # an app that currently accepts everything
+    login()
+    page = tc.get("/edit?h=sonarr.makooy.nl&p=").text
+    assert 'id="accept_all_idps" name="accept_all_idps" value="1"\n           checked' in page \
+        or 'name="accept_all_idps" value="1" checked' in page.replace("\n           ", " ")
+
+    r = post(tc, "/edit", data={
+        "original_hostname": "sonarr.makooy.nl", "original_path": "",
+        "hostname": "sonarr.makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "8989",
+        "create_app": "1", "app_name": "Sonarr", "session_duration": "24h",
+        "allowed_idps": ["idp-google"],
+        "policies": ["pol1"], "allowed_idps": ["idp-google"], "auto_redirect": "1",
+    }, follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    app = [a for a in STATE["apps"] if a["id"] == "app1"][0]
+    assert app["allowed_idps"] == ["idp-google"]
+    assert app["auto_redirect_to_identity"] is True
+    assert app["custom_deny_message"] == "Ask Marc for access", "the rest still survives"
+
+
+def test_the_default_login_methods_can_be_set_once():
+    reset_state()
+    login()
+    r = post(tc, "/settings/idps", data={"default_idps": ["idp-otp"]}, follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    assert settings.default_idps == ["idp-otp"]
+    page = tc.get("/new").text
+    assert 'value="idp-otp" selected' in page and 'value="idp-google" selected' not in page
+
+    post(tc, "/settings/idps", data={}, follow_redirects=False)
+    assert settings.default_idps == []
+    page = tc.get("/new").text
+    assert 'value="idp-google" selected' in page, "back to everything but the PIN"
+    assert 'value="idp-otp" selected' not in page
 
 
 # ------------------------------------------------------- export & backups ---

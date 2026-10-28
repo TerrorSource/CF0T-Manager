@@ -204,8 +204,10 @@ def save_settings(**values) -> str:
 
 def redirect(path: str, ok: str = "", err: str = "") -> RedirectResponse:
     params = {k: v for k, v in (("ok", ok), ("err", err)) if v}
-    url = f"{path}?{urlencode(params)}" if params else path
-    return RedirectResponse(url, status_code=303)
+    if not params:
+        return RedirectResponse(path, status_code=303)
+    separator = "&" if "?" in path else "?"
+    return RedirectResponse(f"{path}{separator}{urlencode(params)}", status_code=303)
 
 
 def render(request: Request, template: str, **ctx) -> HTMLResponse:
@@ -378,8 +380,13 @@ async def settings_page(request: Request):
             return redirect("/", ok=f"Selected tunnel '{tunnels[0]['name']}'.")
     except CloudflareError as exc:
         error = str(exc)
+    try:
+        providers = await client().list_identity_providers()
+    except CloudflareError:
+        providers = []
     return render(request, "settings.html", tunnels=tunnels, token_info=token_info,
-                  cf_error=error, source=settings.source)
+                  cf_error=error, source=settings.source, providers=providers,
+                  default_idps=settings.default_idps)
 
 
 @app.post("/settings/cloudflare")
@@ -434,6 +441,23 @@ async def settings_password(request: Request, current_password: str = Form(""),
     return response
 
 
+@app.post("/settings/idps")
+async def settings_idps(request: Request):
+    form = await request.form()
+    try:
+        providers = await client().list_identity_providers()
+    except CloudflareError as exc:
+        return redirect("/settings", err=str(exc))
+    known = {p.get("id") for p in providers}
+    picked = [i for i in form_list(form, "default_idps") if i in known]
+    error = save_settings(default_idps=picked)
+    if error:
+        return redirect("/settings", err=error)
+    return redirect("/settings", ok="Default identity providers saved."
+                    if picked else "Default cleared: new applications start with every "
+                                   "provider except one-time PIN.")
+
+
 @app.post("/settings/backups")
 async def settings_backups(request: Request, auto_backup: str = Form(""),
                            auto_backup_hours: str = Form("24"), backup_keep: str = Form("14"),
@@ -475,6 +499,28 @@ async def dashboard(request: Request):
     except CloudflareError as exc:
         return render(request, "index.html", rows=[], meta={}, tunnel=None, err_msg=str(exc))
     return render(request, "index.html", rows=rows, meta=meta, tunnel=tunnel)
+
+
+def chosen_idps(form, providers: list[dict]) -> tuple[list[str], str]:
+    """(allowed_idps, error). An empty list means every provider, which is what
+    Cloudflare does with no value at all - including one-time PIN."""
+    if form.get("accept_all_idps"):
+        return [], ""
+    known = {p.get("id") for p in providers}
+    picked = [i for i in form_list(form, "allowed_idps") if i in known]
+    if not picked and providers:
+        return [], ("Pick at least one identity provider, or tick the box that accepts "
+                    "every one of them.")
+    return picked, ""
+
+
+def default_idps(providers: list[dict]) -> list[str]:
+    """What the new-application form starts with: the configured default, or
+    everything except one-time PIN."""
+    configured = [i for i in settings.default_idps if i in {p.get("id") for p in providers}]
+    if configured:
+        return configured
+    return [p["id"] for p in providers if p.get("id") and not services.is_one_time_pin(p)]
 
 
 def destructive_warnings(form, row=None) -> list[str]:
@@ -596,12 +642,14 @@ async def export_xlsx():
 @app.get("/new", response_class=HTMLResponse)
 async def new_form(request: Request):
     try:
-        policies, zones = await asyncio.gather(
-            client().list_policies(), client().list_zones()
+        policies, zones, providers = await asyncio.gather(
+            client().list_policies(), client().list_zones(),
+            client().list_identity_providers(),
         )
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
-    return render(request, "form.html", mode="new", policies=policies, zones=zones,
+    return render(request, "form.html", mode="new", providers=providers,
+                  selected_idps=default_idps(providers), accept_all_idps=False, policies=policies, zones=zones,
                   row=None, form={}, selected_policies=[])
 
 
@@ -613,6 +661,16 @@ async def new_submit(request: Request):
         hostname, service, path, origin = _parse_route_form(form)
     except ValueError as exc:
         return redirect("/new", err=str(exc))
+
+    allowed_idps: list[str] = []
+    if form.get("create_app"):
+        try:
+            providers = await client().list_identity_providers()
+        except CloudflareError as exc:
+            return redirect("/new", err=str(exc))
+        allowed_idps, problem = chosen_idps(form, providers)
+        if problem:
+            return redirect("/new", err=problem)
 
     warnings = destructive_warnings(form)
     if warnings and not form.get("confirmed"):
@@ -632,8 +690,11 @@ async def new_submit(request: Request):
                 policy_ids=policy_ids,
                 session_duration=(form.get("session_duration") or "24h"),
                 launcher_visible=bool(form.get("launcher_visible")),
+                allowed_idps=allowed_idps,
+                auto_redirect=bool(form.get("auto_redirect")),
             )
-            steps.append(f"Access app ({len(policy_ids)} policy/policies)")
+            steps.append(f"Access app ({len(policy_ids)} policy/policies, "
+                         f"{len(allowed_idps) or 'all'} provider(s))")
 
         if form.get("create_dns"):
             zones = await client().list_zones()
@@ -655,8 +716,9 @@ async def edit_form(request: Request):
     path = services.normalize_path(request.query_params.get("p", ""))
     mgr = manager()
     try:
-        row, policies, zones = await asyncio.gather(
-            mgr.get_row(hostname, path), client().list_policies(), client().list_zones()
+        row, policies, zones, providers = await asyncio.gather(
+            mgr.get_row(hostname, path), client().list_policies(), client().list_zones(),
+            client().list_identity_providers(),
         )
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
@@ -679,12 +741,16 @@ async def edit_form(request: Request):
         "app_name": row.app_name or row.hostname.split(".")[0],
         "session_duration": (row.app or {}).get("session_duration") or "24h",
         "launcher_visible": (row.app or {}).get("app_launcher_visible", True),
+        "auto_redirect_to_identity": (row.app or {}).get("auto_redirect_to_identity", False),
         "create_app": row.has_app,
         **parsed,
         **origin,
     }
+    current_idps = (row.app or {}).get("allowed_idps") or []
     return render(request, "form.html", mode="edit", policies=policies, zones=zones, row=row,
-                  form=form, selected_policies=[p.get("id") for p in row.policies])
+                  form=form, selected_policies=[p.get("id") for p in row.policies],
+                  providers=providers, selected_idps=current_idps,
+                  accept_all_idps=bool(row.app) and not current_idps)
 
 
 @app.post("/edit")
@@ -701,6 +767,16 @@ async def edit_submit(request: Request):
         return redirect(f"/edit?h={original_host}&p={original_path}", err=str(exc))
     if row is None:
         return redirect("/", err=f"{original_host} not found.")
+
+    allowed_idps: list[str] = []
+    if form.get("create_app"):
+        try:
+            providers = await client().list_identity_providers()
+        except CloudflareError as exc:
+            return redirect("/", err=str(exc))
+        allowed_idps, problem = chosen_idps(form, providers)
+        if problem:
+            return redirect(f"/edit?h={original_host}&p={original_path}", err=problem)
 
     warnings = destructive_warnings(form, row)
     if warnings and not form.get("confirmed"):
@@ -722,14 +798,17 @@ async def edit_submit(request: Request):
         visible = bool(form.get("launcher_visible"))
 
         if row.has_app and form.get("create_app"):
-            await mgr.update_app(row.app, name, domain, policy_ids, duration, visible)
+            await mgr.update_app(row.app, name, domain, policy_ids, duration, visible,
+                                 allowed_idps, bool(form.get("auto_redirect")))
             steps.append("Access app updated")
         elif row.has_app and not form.get("create_app"):
             await client().delete_access_app(row.app["id"])
             services.invalidate_overview(mgr.tunnel_id)
             steps.append("Access app deleted")
         elif not row.has_app and form.get("create_app"):
-            await mgr.create_app(name, domain, policy_ids, duration, visible)
+            await mgr.create_app(name, domain, policy_ids, duration, visible,
+                                 allowed_idps=allowed_idps,
+                                 auto_redirect=bool(form.get("auto_redirect")))
             steps.append("Access app created")
 
         # A rename needs its own DNS record. If the old hostname had a dedicated
