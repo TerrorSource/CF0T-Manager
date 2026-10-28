@@ -22,6 +22,10 @@ For each hostname the tool:
    order you picked them, and limits it to the login methods you chose,
 3. creates the **DNS CNAME** to `<tunnel>.cfargotunnel.com`, proxied.
 
+Without the identity-provider permission the login-method list stays empty; the
+form says so and leaves an existing application's methods untouched rather than
+resetting them.
+
 Login methods matter more than they look: an application that does not name any
 accepts **every** method Cloudflare has configured, one-time PIN included, so
 anyone a policy lets through can sign in with an emailed code. New applications
@@ -70,6 +74,7 @@ Dashboard → *My Profile* → *API Tokens* → *Create Token* → *Create Custo
 |---|---|---|
 | Account | Cloudflare Tunnel | Edit |
 | Account | Access: Apps and Policies | Edit |
+| Account | Access: Organizations, Identity Providers, and Groups | Read |
 | Zone | DNS | Edit *(optional, for DNS records)* |
 | Zone | Zone | Read *(optional, for the domain dropdown)* |
 

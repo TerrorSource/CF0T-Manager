@@ -388,7 +388,7 @@ class ZeroTrustManager:
             "app_launcher_visible": launcher_visible,
             # Left empty, Cloudflare accepts every login method there is,
             # one-time PIN included. So it is always sent explicitly.
-            "allowed_idps": allowed_idps or [],
+            "allowed_idps": list(allowed_idps or []),
             "auto_redirect_to_identity": auto_redirect,
         }
         if policy_ids:
@@ -426,10 +426,13 @@ class ZeroTrustManager:
             "type": app.get("type") or "self_hosted",
             "session_duration": session_duration,
             "app_launcher_visible": launcher_visible,
-            "allowed_idps": allowed_idps or [],
             "auto_redirect_to_identity": auto_redirect,
             "policies": [{"id": pid, "precedence": i + 1} for i, pid in enumerate(policy_ids)],
         })
+        # None means the caller could not read the provider list, so whatever
+        # the application already allows is kept rather than reset to "all".
+        if allowed_idps is not None:
+            payload["allowed_idps"] = list(allowed_idps)
 
         # A rename has to move the hostname in the secondary destination lists too.
         if old_domain and domain != old_domain:

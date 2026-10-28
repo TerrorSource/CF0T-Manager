@@ -380,10 +380,7 @@ async def settings_page(request: Request):
             return redirect("/", ok=f"Selected tunnel '{tunnels[0]['name']}'.")
     except CloudflareError as exc:
         error = str(exc)
-    try:
-        providers = await client().list_identity_providers()
-    except CloudflareError:
-        providers = []
+    providers = await safe_identity_providers()
     return render(request, "settings.html", tunnels=tunnels, token_info=token_info,
                   cf_error=error, source=settings.source, providers=providers,
                   default_idps=settings.default_idps)
@@ -444,10 +441,9 @@ async def settings_password(request: Request, current_password: str = Form(""),
 @app.post("/settings/idps")
 async def settings_idps(request: Request):
     form = await request.form()
-    try:
-        providers = await client().list_identity_providers()
-    except CloudflareError as exc:
-        return redirect("/settings", err=str(exc))
+    providers = await safe_identity_providers()
+    if not providers:
+        return redirect("/settings", err=IDP_PERMISSION)
     known = {p.get("id") for p in providers}
     picked = [i for i in form_list(form, "default_idps") if i in known]
     error = save_settings(default_idps=picked)
@@ -501,17 +497,37 @@ async def dashboard(request: Request):
     return render(request, "index.html", rows=rows, meta=meta, tunnel=tunnel)
 
 
-def chosen_idps(form, providers: list[dict]) -> tuple[list[str], str]:
-    """(allowed_idps, error). An empty list means every provider, which is what
-    Cloudflare does with no value at all - including one-time PIN."""
+IDP_PERMISSION = ("The API token cannot read your login methods. Add "
+                  "\u201cAccess: Organizations, Identity Providers, and Groups\u201d (Read) "
+                  "to it in the Cloudflare dashboard.")
+
+
+def chosen_idps(form, providers: list[dict]) -> tuple[list[str] | None, str]:
+    """(allowed_idps, error).
+
+    An empty list means every provider, which is what Cloudflare does with no
+    value at all, one-time PIN included. None means the list could not be read,
+    so the caller must leave the application's current choice alone.
+    """
     if form.get("accept_all_idps"):
         return [], ""
+    if not providers:
+        return None, ""
     known = {p.get("id") for p in providers}
     picked = [i for i in form_list(form, "allowed_idps") if i in known]
-    if not picked and providers:
-        return [], ("Pick at least one identity provider, or tick the box that accepts "
-                    "every one of them.")
+    if not picked:
+        return None, ("Pick at least one identity provider, or tick the box that accepts "
+                      "every one of them.")
     return picked, ""
+
+
+async def safe_identity_providers() -> list[dict]:
+    """Empty when the token may not read them, which the forms then explain."""
+    try:
+        return await client().list_identity_providers()
+    except CloudflareError as exc:
+        logger.info("could not read identity providers: %s", exc)
+        return []
 
 
 def default_idps(providers: list[dict]) -> list[str]:
@@ -642,12 +658,11 @@ async def export_xlsx():
 @app.get("/new", response_class=HTMLResponse)
 async def new_form(request: Request):
     try:
-        policies, zones, providers = await asyncio.gather(
-            client().list_policies(), client().list_zones(),
-            client().list_identity_providers(),
-        )
+        policies, zones = await asyncio.gather(
+            client().list_policies(), client().list_zones())
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
+    providers = await safe_identity_providers()
     return render(request, "form.html", mode="new", providers=providers,
                   selected_idps=default_idps(providers), accept_all_idps=False, policies=policies, zones=zones,
                   row=None, form={}, selected_policies=[])
@@ -662,15 +677,15 @@ async def new_submit(request: Request):
     except ValueError as exc:
         return redirect("/new", err=str(exc))
 
-    allowed_idps: list[str] = []
+    allowed_idps: list[str] | None = []
     if form.get("create_app"):
-        try:
-            providers = await client().list_identity_providers()
-        except CloudflareError as exc:
-            return redirect("/new", err=str(exc))
+        providers = await safe_identity_providers()
         allowed_idps, problem = chosen_idps(form, providers)
         if problem:
             return redirect("/new", err=problem)
+        if allowed_idps is None:
+            return redirect("/new", err=IDP_PERMISSION + " Until then, tick \u201cAccept every "
+                                       "login method\u201d if you really want that.")
 
     warnings = destructive_warnings(form)
     if warnings and not form.get("confirmed"):
@@ -694,7 +709,7 @@ async def new_submit(request: Request):
                 auto_redirect=bool(form.get("auto_redirect")),
             )
             steps.append(f"Access app ({len(policy_ids)} policy/policies, "
-                         f"{len(allowed_idps) or 'all'} provider(s))")
+                         f"{len(allowed_idps) if allowed_idps else 'all'} login method(s))")
 
         if form.get("create_dns"):
             zones = await client().list_zones()
@@ -716,10 +731,9 @@ async def edit_form(request: Request):
     path = services.normalize_path(request.query_params.get("p", ""))
     mgr = manager()
     try:
-        row, policies, zones, providers = await asyncio.gather(
-            mgr.get_row(hostname, path), client().list_policies(), client().list_zones(),
-            client().list_identity_providers(),
-        )
+        row, policies, zones = await asyncio.gather(
+            mgr.get_row(hostname, path), client().list_policies(), client().list_zones())
+        providers = await safe_identity_providers()
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
     if row is None:
@@ -768,12 +782,9 @@ async def edit_submit(request: Request):
     if row is None:
         return redirect("/", err=f"{original_host} not found.")
 
-    allowed_idps: list[str] = []
+    allowed_idps: list[str] | None = []
     if form.get("create_app"):
-        try:
-            providers = await client().list_identity_providers()
-        except CloudflareError as exc:
-            return redirect("/", err=str(exc))
+        providers = await safe_identity_providers()
         allowed_idps, problem = chosen_idps(form, providers)
         if problem:
             return redirect(f"/edit?h={original_host}&p={original_path}", err=problem)

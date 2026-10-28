@@ -702,6 +702,58 @@ def test_login_methods_can_be_changed_on_an_existing_app():
     assert app["custom_deny_message"] == "Ask Marc for access", "the rest still survives"
 
 
+def test_an_unreadable_provider_list_never_opens_an_app_up(monkeypatch):
+    """Without the identity-provider permission the list comes back empty. That
+    must not be written back as "accept everything"."""
+    reset_state()
+    STATE["apps"][0]["allowed_idps"] = ["idp-google"]
+    login()
+
+    async def no_providers():
+        return []
+
+    monkeypatch.setattr(main, "safe_identity_providers", no_providers)
+
+    page = tc.get("/edit?h=sonarr.makooy.nl&p=").text
+    assert "cannot be read" in page and "Identity Providers" in page
+    assert 'name="allowed_idps"' not in page, "no empty picker to submit by accident"
+
+    r = post(tc, "/edit", data={
+        "original_hostname": "sonarr.makooy.nl", "original_path": "",
+        "hostname": "sonarr.makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "8989",
+        "create_app": "1", "app_name": "Sonarr", "session_duration": "24h",
+        "policies": ["pol1"],
+    }, follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    app = [a for a in STATE["apps"] if a["id"] == "app1"][0]
+    assert app["allowed_idps"] == ["idp-google"], "left exactly as it was"
+
+
+def test_creating_an_app_is_refused_while_the_list_is_unreadable(monkeypatch):
+    reset_state()
+    login()
+
+    async def no_providers():
+        return []
+
+    monkeypatch.setattr(main, "safe_identity_providers", no_providers)
+    base = {"hostname": "blind", "zone": "makooy.nl", "scheme": "http",
+            "origin_host": "192.168.1.9", "origin_port": "8080",
+            "create_app": "1", "app_name": "Blind", "policies": ["pol1"]}
+
+    r = post(tc, "/new", data=base, follow_redirects=False)
+    assert "err=" in r.headers["location"]
+    assert "Identity+Providers" in r.headers["location"]
+    assert not [a for a in STATE["apps"] if a["domain"] == "blind.makooy.nl"]
+
+    # deliberately accepting everything still works
+    r = post(tc, "/new", data={**base, "accept_all_idps": "1"}, follow_redirects=False)
+    assert "err=" not in r.headers["location"], r.headers["location"]
+    app = [a for a in STATE["apps"] if a["domain"] == "blind.makooy.nl"][0]
+    assert app["allowed_idps"] == []
+
+
 def test_the_default_login_methods_can_be_set_once():
     reset_state()
     login()

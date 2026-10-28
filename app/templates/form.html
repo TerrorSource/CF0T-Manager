@@ -121,6 +121,15 @@
       </select>
     </div>
   </div>
+  {% if not providers %}
+  <div class="flash warn">
+    Your login methods cannot be read: the API token is missing
+    <span class="mono">Access: Organizations, Identity Providers, and Groups</span> (Read).
+    {% if mode == 'edit' %}Saving leaves this application's current methods exactly as they are.
+    {% else %}Add that permission, or tick the box below to accept every method including
+    one-time PIN.{% endif %}
+  </div>
+  {% else %}
   <div class="field">
     <label for="allowed_idps">Login methods (ctrl/cmd-click to select more than one)</label>
     <select id="allowed_idps" name="allowed_idps" multiple size="{{ [providers|length, 5]|min or 3 }}">
@@ -133,6 +142,7 @@
     <div class="hint">Only these appear on the Cloudflare Access login page. One-time PIN lets
       anyone a policy allows in with an emailed code, so leave it out unless you want it.</div>
   </div>
+  {% endif %}
   <div class="check">
     <input type="checkbox" id="accept_all_idps" name="accept_all_idps" value="1"
            {% if accept_all_idps %}checked{% endif %}>

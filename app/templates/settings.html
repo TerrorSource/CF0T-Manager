@@ -129,8 +129,9 @@ through environment variables win and are shown as read-only.</p>
       <button class="btn primary" type="submit">Save</button>
     </form>
     {% else %}
-    <p class="hint">No identity providers readable — the token may be missing
-      <span class="mono">Access: Apps and Policies</span>.</p>
+    <p class="hint">Your login methods cannot be read. Add
+      <span class="mono">Access: Organizations, Identity Providers, and Groups</span> (Read)
+      to the API token, then reload this page.</p>
     {% endif %}
   </div>
 </div>
