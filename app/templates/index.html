@@ -29,12 +29,13 @@
     <thead>
       <tr>
         <th>Hostname</th><th>Origin / service</th><th>Access app</th>
-        <th>Policies</th><th>Status</th><th></th>
+        <th>Login methods</th><th>Policies</th><th>Status</th><th></th>
       </tr>
     </thead>
     <tbody>
     {% for row in rows %}
-      <tr data-search="{{ (row.hostname ~ ' ' ~ row.path ~ ' ' ~ row.service ~ ' ' ~ row.app_name ~ ' ' ~ (row.policies | map(attribute='name') | join(' '))) | lower }}">
+      {% set methods = (row.allowed_idps | map('idp_name', meta.idp_names) | join(' ')) if row.allowed_idps else ('all methods' if row.has_app else '') %}
+      <tr data-search="{{ (row.hostname ~ ' ' ~ row.path ~ ' ' ~ row.service ~ ' ' ~ row.app_name ~ ' ' ~ (row.policies | map(attribute='name') | join(' ')) ~ ' ' ~ methods) | lower }}">
         <td>
           <a href="https://{{ row.hostname }}{{ row.path }}" target="_blank" rel="noopener">{{ row.hostname }}</a>
           {% if row.path %}<span class="mono" style="color:var(--muted)">{{ row.path }}</span>{% endif %}
@@ -51,6 +52,19 @@
         <td class="mono">{{ row.service or '—' }}</td>
         <td>{{ row.app_name or '—' }}</td>
         <td>
+          {% if not row.has_app %}
+            <span class="hint">—</span>
+          {% elif not row.allowed_idps %}
+            <span class="badge warn" title="Every method Cloudflare has configured, one-time PIN included">all methods</span>
+          {% else %}
+            <div class="badges">
+            {% for idp in row.allowed_idps %}
+              <span class="badge {{ 'warn' if idp in meta.otp_ids }}">{{ meta.idp_names.get(idp, 'unknown') }}</span>
+            {% endfor %}
+            </div>
+          {% endif %}
+        </td>
+        <td>
           {% if row.policies %}
             <div class="badges">
             {% for p in row.policies %}<span class="badge">{{ p.name }}</span>{% endfor %}
@@ -58,7 +72,7 @@
           {% else %}<span class="badge warn">no policy</span>{% endif %}
         </td>
         <td>
-          <div class="badges">
+          <div class="badges nowrap">
             <span class="badge {{ 'ok' if row.has_route else 'off' }}">route</span>
             <span class="badge {{ 'ok' if row.has_app else 'off' }}">access</span>
             <span class="badge {{ 'ok' if row.dns_ok else 'off' }}">dns</span>

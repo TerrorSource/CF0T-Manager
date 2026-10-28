@@ -79,6 +79,11 @@ class ServiceRow:
         return self.has_route or self.is_self_hosted
 
     @property
+    def allowed_idps(self) -> list[str]:
+        """Empty on an existing application means every method Cloudflare has."""
+        return (self.app or {}).get("allowed_idps") or []
+
+    @property
     def other_hostnames(self) -> list[str]:
         if not self.app:
             return []
@@ -263,6 +268,13 @@ class ZeroTrustManager:
             return cached[1], cached[2]
         return None
 
+    async def _safe_providers(self) -> list[dict]:
+        """Needs its own token permission, so a failure is not fatal."""
+        try:
+            return await self.cf.list_identity_providers()
+        except CloudflareError:
+            return []
+
     async def load_overview(self, with_dns: bool = True,
                             refresh: bool = False) -> tuple[list[ServiceRow], dict]:
         ready = self._fresh_enough(refresh)
@@ -281,14 +293,16 @@ class ZeroTrustManager:
     async def _load_overview(self, with_dns: bool) -> tuple[list[ServiceRow], dict]:
 
         if with_dns:
-            config, apps, (zones, dns_by_name, dns_error) = await asyncio.gather(
+            config, apps, (zones, dns_by_name, dns_error), providers = await asyncio.gather(
                 self.cf.get_tunnel_config(self.tunnel_id),
                 self.cf.list_access_apps(),
                 self._zones_and_dns(),
+                self._safe_providers(),
             )
         else:
-            config, apps = await asyncio.gather(
-                self.cf.get_tunnel_config(self.tunnel_id), self.cf.list_access_apps()
+            config, apps, providers = await asyncio.gather(
+                self.cf.get_tunnel_config(self.tunnel_id), self.cf.list_access_apps(),
+                self._safe_providers()
             )
             zones, dns_by_name, dns_error = [], {}, ""
 
@@ -317,8 +331,12 @@ class ZeroTrustManager:
             primary = app_hostnames(app)[0] if app_hostnames(app) else (host, path)
             rows.append(ServiceRow(hostname=primary[0], path=primary[1], rule=None, app=app))
 
-        meta: dict[str, Any] = {"config": config, "apps": apps, "zones": zones,
-                                "dns_error": dns_error or None}
+        meta: dict[str, Any] = {
+            "config": config, "apps": apps, "zones": zones,
+            "dns_error": dns_error or None,
+            "idp_names": {p["id"]: provider_label(p) for p in providers if p.get("id")},
+            "otp_ids": {p["id"] for p in providers if p.get("id") and is_one_time_pin(p)},
+        }
 
         if dns_by_name:
             for row in rows:

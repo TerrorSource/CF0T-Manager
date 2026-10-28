@@ -637,6 +637,33 @@ def test_restore_never_overwrites_an_existing_dns_record():
     assert len(kept) == 1 and kept[0]["content"] == "192.168.1.250", "left exactly as it was"
 
 
+def test_the_overview_shows_which_login_methods_each_app_allows():
+    reset_state()
+    STATE["apps"][0]["allowed_idps"] = ["idp-google"]      # Sonarr: Google only
+    STATE["apps"][1]["allowed_idps"] = []                  # SaaS app: everything
+    STATE["apps"][2]["allowed_idps"] = ["idp-google", "idp-otp"]
+    login()
+    page = tc.get("/").text
+
+    assert "Login methods" in page
+    assert "all methods" in page, "an empty list is every method, and is flagged"
+    assert "One-time PIN" in page, "a nameless provider still reads properly"
+    assert page.count(">Google<") >= 2
+
+
+def test_login_methods_are_in_the_exports():
+    reset_state()
+    STATE["apps"][0]["allowed_idps"] = ["idp-google"]
+    STATE["apps"][1]["allowed_idps"] = []
+    login()
+    lines = tc.get("/export.csv").text.lstrip("\ufeff").splitlines()
+    assert "Login methods" in lines[0]
+    sonarr = [line for line in lines if line.startswith("sonarr.makooy.nl;")][0]
+    assert "Google" in sonarr
+    saas = [line for line in lines if line.startswith("workspace.makooy.nl;")][0]
+    assert "all methods (incl. one-time PIN)" in saas
+
+
 def test_a_new_app_does_not_accept_one_time_pin_by_default():
     """An empty allowed_idps means Cloudflare accepts every login method, PIN
     included. The form must always send the choice explicitly."""

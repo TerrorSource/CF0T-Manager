@@ -130,6 +130,7 @@ async def lifespan(app: FastAPI):
 CSRF_COOKIE = "cf0t_csrf"
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.filters["provider_label"] = services.provider_label
+templates.env.filters["idp_name"] = lambda idp, names: names.get(idp, "unknown")
 
 
 def client() -> CloudflareClient:
@@ -575,20 +576,28 @@ def confirmation_page(request: Request, action: str, form, warnings: list[str],
                   confirm_label=confirm_label)
 
 
-EXPORT_COLUMNS = ("Hostname", "Path", "Origin / service", "Access app", "Policies",
-                  "Session duration", "In App Launcher", "Tunnel route", "Access app present",
-                  "DNS type", "DNS target")
+EXPORT_COLUMNS = ("Hostname", "Path", "Origin / service", "Access app", "Login methods",
+                  "Policies", "Session duration", "In App Launcher", "Tunnel route",
+                  "Access app present", "DNS type", "DNS target")
 
 
-def export_rows(rows) -> list[list[str]]:
+def export_rows(rows, idp_names: dict[str, str] | None = None) -> list[list[str]]:
+    names = idp_names or {}
     table = []
     for row in rows:
         app = row.app or {}
+        if not row.has_app:
+            methods = ""
+        elif not row.allowed_idps:
+            methods = "all methods (incl. one-time PIN)"
+        else:
+            methods = ", ".join(names.get(i, i) for i in row.allowed_idps)
         table.append([
             row.hostname,
             row.path,
             row.service,
             row.app_name,
+            methods,
             ", ".join(p.get("name", "") for p in row.policies),
             app.get("session_duration", ""),
             "yes" if app.get("app_launcher_visible") else "no" if app else "",
@@ -603,13 +612,13 @@ def export_rows(rows) -> list[list[str]]:
 @app.get("/export.csv")
 async def export_csv():
     try:
-        rows, _ = await manager().load_overview()
+        rows, meta = await manager().load_overview()
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
     buffer = io.StringIO()
     writer = csv.writer(buffer, delimiter=";")  # opens straight into Excel on a Dutch locale
     writer.writerow(EXPORT_COLUMNS)
-    writer.writerows(export_rows(rows))
+    writer.writerows(export_rows(rows, meta.get("idp_names")))
     stamp = time.strftime("%Y%m%d-%H%M%S")
     return Response(
         "\ufeff" + buffer.getvalue(),  # BOM so Excel reads the UTF-8 correctly
@@ -625,11 +634,11 @@ async def export_xlsx():
     from openpyxl.utils import get_column_letter
 
     try:
-        rows, _ = await manager().load_overview()
+        rows, meta = await manager().load_overview()
     except CloudflareError as exc:
         return redirect("/", err=str(exc))
 
-    table = export_rows(rows)
+    table = export_rows(rows, meta.get("idp_names"))
 
     book = Workbook()
     sheet = book.active
