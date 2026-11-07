@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set wide_page = true %}
 {% set active_page = 'index' %}
 {% block content %}
 <h1>Route order</h1>
@@ -8,9 +9,10 @@ most specific one above the general one.</p>
 
 <div class="panel">
   {% if rules %}
+  <div class="table-wrap">
   <table>
     <thead>
-      <tr><th style="width:60px">#</th><th>Hostname</th><th>Path</th><th>Origin / service</th><th></th></tr>
+      <tr><th style="width:60px">#</th><th>Hostname</th><th>Path</th><th>Origin / service</th><th class="actions"></th></tr>
     </thead>
     <tbody>
     {% for rule in rules %}
@@ -45,6 +47,7 @@ most specific one above the general one.</p>
       </tr>
     </tbody>
   </table>
+  </div>
   {% else %}
   <div class="empty">No routes on this tunnel yet.</div>
   {% endif %}

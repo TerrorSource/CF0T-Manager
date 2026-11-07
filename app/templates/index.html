@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set wide_page = true %}
 {% set active_page = 'index' %}
 {% block content %}
 <h1>Applications</h1>
@@ -25,11 +26,12 @@
 
 <div class="panel">
   {% if rows %}
+  <div class="table-wrap">
   <table>
     <thead>
       <tr>
         <th>Hostname</th><th>Origin / service</th><th>Access app</th>
-        <th>Login methods</th><th>Policies</th><th>Status</th><th></th>
+        <th>Login methods</th><th>Policies</th><th>Status</th><th class="actions"></th>
       </tr>
     </thead>
     <tbody>
@@ -90,6 +92,7 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <div class="empty">Nothing here yet. <a href="/new">Add your first application →</a></div>
   {% endif %}

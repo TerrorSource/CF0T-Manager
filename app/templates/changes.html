@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set wide_page = true %}
 {% set active_page = 'changes' %}
 {% block content %}
 <h1>Changes</h1>
@@ -7,6 +8,7 @@ itself are not in here.</p>
 
 <div class="panel">
   {% if entries %}
+  <div class="table-wrap">
   <table>
     <thead><tr><th>When</th><th>What</th><th>Hostname</th><th>Details</th><th>From</th></tr></thead>
     <tbody>
@@ -21,6 +23,7 @@ itself are not in here.</p>
     {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <div class="empty">Nothing changed through this tool yet.</div>
   {% endif %}

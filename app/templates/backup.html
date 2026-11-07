@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set wide_page = true %}
 {% set active_page = 'backup' %}
 {% block content %}
 <h1>Backup &amp; restore</h1>
@@ -19,9 +20,10 @@
   <div class="panel-head">Stored backups</div>
   <div class="panel-body" style="padding:0">
     {% if stored %}
+    <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>When</th><th>Kind</th><th>Contents</th><th>Size</th><th></th></tr>
+        <tr><th>When</th><th>Kind</th><th>Contents</th><th>Size</th><th class="actions"></th></tr>
       </thead>
       <tbody>
       {% for item in stored %}
@@ -54,6 +56,7 @@
       {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
     <div class="empty">No stored backups yet. The first automatic one is written shortly after startup.</div>
     {% endif %}

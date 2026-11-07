@@ -25,10 +25,27 @@
   {% endif %}
 </header>
 {% endif %}
-<main>
+<main class="{{ 'wide' if wide_page }}">
   {% if ok_msg %}<div class="flash ok">{{ ok_msg }}</div>{% endif %}
   {% if err_msg %}<div class="flash err">{{ err_msg }}</div>{% endif %}
   {% block content %}{% endblock %}
 </main>
+<script>
+// A pinned actions column only needs its shadow while a row slides under it.
+// Resizing can leave the table wide enough again, so the state is synced then too.
+(function () {
+  const wraps = Array.from(document.querySelectorAll(".table-wrap"));
+  const sync = () => {
+    for (const wrap of wraps) {
+      wrap.classList.toggle("scrolled", wrap.scrollLeft > 0);
+    }
+  };
+  for (const wrap of wraps) {
+    wrap.addEventListener("scroll", sync, { passive: true });
+  }
+  window.addEventListener("resize", sync, { passive: true });
+  sync();
+})();
+</script>
 </body>
 </html>
