@@ -195,7 +195,11 @@ through environment variables win and are shown as read-only.</p>
                {% if settings.secure_cookie %}checked{% endif %}
                {% if source('secure_cookie') == 'env' %}disabled{% endif %}>
         <label for="secure_cookie">Only send the session cookie over https
-          <span class="hint">(turn on once you reach this tool through Cloudflare)</span></label>
+          <span class="hint">Turn this on only once you always reach this tool over https.
+            Opening it on a plain http address afterwards makes your browser discard the
+            cookie, and you will not be able to log in there at all. Setting
+            <span class="mono">CF0T_SECURE_COOKIE=false</span> in the environment gets you
+            back in.</span></label>
       </div>
       <button class="btn primary" type="submit">Save preferences</button>
     </form>

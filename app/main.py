@@ -237,6 +237,29 @@ def rotate_csrf(response) -> None:
                         secure=settings.secure_cookie, path="/")
 
 
+def secure_cookie_mismatch(request: Request) -> bool:
+    """True when cookies are marked Secure but this request cannot carry one.
+
+    The browser silently drops every Secure cookie on a plain-http origin, so
+    the CSRF cookie never comes back and no session can ever be established:
+    the password is correct and the login still goes nowhere. Loopback is
+    exempt because browsers count it as a trustworthy origin either way.
+    """
+    if not settings.secure_cookie:
+        return False
+    if request.url.scheme == "https":
+        return False
+    return (request.url.hostname or "") not in ("localhost", "127.0.0.1", "::1")
+
+
+INSECURE_ORIGIN = (
+    "This page was opened over plain http, but the setting \u201conly send the session "
+    "cookie over https\u201d is on, so your browser is throwing the cookie away and the "
+    "login cannot complete. Reach the tool over https, or set CF0T_SECURE_COOKIE=false "
+    "in your .env or Portainer stack variables and restart the container."
+)
+
+
 class FormExpired(Exception):
     """The form did not echo the CSRF cookie back. Usually a page that was
     reopened from the browser's history after the token had moved on, not an
@@ -267,9 +290,12 @@ async def form_expired(request: Request, _exc: FormExpired) -> Response:
     """Nothing was changed, so the reply is the page itself with a fresh token.
     A login form reopened from history lands here, and sending it on to a bare
     400 would leave no way forward."""
+    # A dropped Secure cookie looks exactly like a stale token, so name the real
+    # cause rather than sending someone off to reload a page that cannot work.
+    message = INSECURE_ORIGIN if secure_cookie_mismatch(request) else EXPIRED_MESSAGE
     if request.url.path in ("/login", "/logout"):
-        return redirect("/login", err=EXPIRED_MESSAGE)
-    return render(request, "expired.html", status_code=400, err_msg=EXPIRED_MESSAGE)
+        return redirect("/login", err=message)
+    return render(request, "expired.html", status_code=400, err_msg=message)
 
 
 @app.middleware("http")
@@ -305,7 +331,8 @@ async def healthz() -> JSONResponse:
 async def login_form(request: Request):
     if not settings.auth_enabled or auth.is_logged_in(request):
         return RedirectResponse("/", status_code=303)
-    return render(request, "login.html")
+    return render(request, "login.html",
+                  insecure_origin=INSECURE_ORIGIN if secure_cookie_mismatch(request) else "")
 
 
 @app.post("/login")

@@ -232,6 +232,31 @@ def test_the_login_form_still_works_after_reopening_it_from_history():
     assert "expired" in r.text, "and says why the first try did nothing"
 
 
+def test_https_only_cookies_on_a_plain_address_say_so():
+    """Ticking "only send the session cookie over https" and then opening the
+    tool on a plain http LAN address makes the browser drop every cookie, so
+    the right password still lands back on the login page. That used to be
+    reported as an expired form, which sends you off fixing the wrong thing."""
+    from app.config import settings as cfg
+    cfg.store.update(secure_cookie=True)
+    try:
+        fresh = TestClient(main.app, base_url="http://192.168.1.10:8099")
+        page = fresh.get("/login")
+        assert "throwing the cookie away" in page.text
+        assert "CF0T_SECURE_COOKIE=false" in page.text, "and how to get back in"
+
+        # The same request without a cookie reads as a stale form; it must not.
+        r = fresh.post("/login", data={"password": "secret", "csrf_token": "x"},
+                       follow_redirects=False)
+        assert "CF0T_SECURE_COOKIE" in r.headers["location"]
+
+        # Loopback is a trustworthy origin, so nothing is wrong there.
+        local = TestClient(main.app, base_url="http://127.0.0.1:8099")
+        assert "throwing the cookie away" not in local.get("/login").text
+    finally:
+        cfg.store.update(secure_cookie=False)
+
+
 def test_pages_behind_the_login_are_not_cached():
     """Without this the browser can serve a login page from its back/forward
     cache, carrying a CSRF token that was rotated away when you signed in."""

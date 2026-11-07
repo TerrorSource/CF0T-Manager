@@ -5,6 +5,7 @@
   <div class="panel">
     <div class="panel-head"><span class="brand"><span class="dot"></span> CF0T-Manager</span></div>
     <div class="panel-body">
+      {% if insecure_origin %}<div class="flash warn">{{ insecure_origin }}</div>{% endif %}
       <form method="post" action="/login">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="field">
