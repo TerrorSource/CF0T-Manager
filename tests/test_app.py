@@ -188,15 +188,69 @@ def test_a_form_without_a_csrf_token_is_refused():
     fresh = TestClient(main.app)
     fresh.get("/login")  # gets the cookie, which we then do not echo back
     r = fresh.post("/login", data={"password": "secret"}, follow_redirects=False)
-    assert r.status_code == 400, "a POST that does not carry the token is rejected"
-    assert "expired" in r.text
+    assert r.status_code == 303, "the login form comes back rather than a bare error"
+    assert r.headers["location"].startswith("/login") and "err=" in r.headers["location"]
+    assert not fresh.cookies.get(auth.COOKIE_NAME), "but no session was handed out"
 
     r = fresh.post("/login", data={"password": "secret", "csrf_token": "something else"},
                    follow_redirects=False)
-    assert r.status_code == 400, "and a wrong token is rejected too"
+    assert r.status_code == 303 and "err=" in r.headers["location"], "a wrong token too"
+    assert not fresh.cookies.get(auth.COOKIE_NAME)
 
     r = post(fresh, "/login", data={"password": "secret"}, follow_redirects=False)
     assert r.status_code == 303 and "err=" not in r.headers.get("location", "err=")
+
+
+def test_the_login_form_still_works_after_reopening_it_from_history():
+    """Logging in rotates the CSRF token. A login page left in another tab, or
+    come back to with the back button, used to submit the old one and dead-end
+    on a raw JSON 400 with no way forward."""
+    auth.reset_throttle()
+    fresh = TestClient(main.app)
+    fresh.get("/login")
+    stale = fresh.cookies.get(main.CSRF_COOKIE)
+
+    r = post(fresh, "/login", data={"password": "secret"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    assert fresh.cookies.get(main.CSRF_COOKIE) != stale, "the token moved on"
+
+    r = fresh.post("/login", data={"password": "secret", "csrf_token": stale},
+                   follow_redirects=False)
+    assert r.status_code == 303, "the stale form is not a dead end"
+    assert r.headers["location"].startswith("/login")
+
+    # Still signed in, so following that lands straight in the application.
+    page = fresh.get("/login", follow_redirects=True)
+    assert page.status_code == 200 and 'name="password"' not in page.text
+
+    # And once the session really is gone, the form comes back with the reason.
+    fresh.cookies.delete(auth.COOKIE_NAME)
+    r = fresh.post("/login", data={"password": "secret", "csrf_token": stale},
+                   follow_redirects=True)
+    assert r.status_code == 200
+    assert 'name="password"' in r.text, "the form is usable again"
+    assert "expired" in r.text, "and says why the first try did nothing"
+
+
+def test_pages_behind_the_login_are_not_cached():
+    """Without this the browser can serve a login page from its back/forward
+    cache, carrying a CSRF token that was rotated away when you signed in."""
+    auth.reset_throttle()
+    fresh = TestClient(main.app)
+    assert fresh.get("/login").headers.get("cache-control") == "no-store"
+    login(fresh)
+    assert fresh.get("/").headers.get("cache-control") == "no-store"
+
+
+def test_a_stale_form_elsewhere_gets_a_page_not_json():
+    auth.reset_throttle()
+    fresh = TestClient(main.app)
+    login(fresh)
+    r = fresh.post("/settings/preferences", data={"csrf_token": "no longer the one"},
+                   follow_redirects=False)
+    assert r.status_code == 400
+    assert r.headers["content-type"].startswith("text/html"), "a readable page, not JSON"
+    assert "expired" in r.text and "Go back" in r.text
 
 
 def test_login_is_throttled():

@@ -212,7 +212,7 @@ def redirect(path: str, ok: str = "", err: str = "") -> RedirectResponse:
     return RedirectResponse(f"{path}{separator}{urlencode(params)}", status_code=303)
 
 
-def render(request: Request, template: str, **ctx) -> HTMLResponse:
+def render(request: Request, template: str, status_code: int = 200, **ctx) -> HTMLResponse:
     ctx.setdefault("ok_msg", request.query_params.get("ok", ""))
     ctx.setdefault("err_msg", request.query_params.get("err", ""))
     ctx.setdefault("settings", settings)
@@ -220,9 +220,13 @@ def render(request: Request, template: str, **ctx) -> HTMLResponse:
 
     token = request.cookies.get(CSRF_COOKIE) or secrets.token_hex(16)
     ctx["csrf_token"] = token
-    response = templates.TemplateResponse(request, template, ctx)
+    response = templates.TemplateResponse(request, template, ctx, status_code=status_code)
     response.set_cookie(CSRF_COOKIE, token, httponly=True, samesite="lax",
                         secure=settings.secure_cookie, path="/")
+    # Logging in rotates the token, so a page served from the back/forward
+    # cache would carry a dead one. no-store also keeps these pages, which are
+    # all behind the login, out of a shared cache.
+    response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -231,6 +235,12 @@ def rotate_csrf(response) -> None:
     in does not stay valid afterwards."""
     response.set_cookie(CSRF_COOKIE, secrets.token_hex(16), httponly=True, samesite="lax",
                         secure=settings.secure_cookie, path="/")
+
+
+class FormExpired(Exception):
+    """The form did not echo the CSRF cookie back. Usually a page that was
+    reopened from the browser's history after the token had moved on, not an
+    attack, so it is answered with something readable."""
 
 
 async def csrf_guard(request: Request) -> None:
@@ -242,13 +252,24 @@ async def csrf_guard(request: Request) -> None:
     form = await request.form()  # cached, so the route can read it again
     sent = str(form.get("csrf_token") or "")
     if not cookie or not hmac.compare_digest(cookie, sent):
-        raise HTTPException(status_code=400,
-                            detail="This form expired. Go back, reload the page and try again.")
+        raise FormExpired()
 
 
 app = FastAPI(title="CF0T-Manager", lifespan=lifespan, docs_url=None, redoc_url=None,
               openapi_url=None, dependencies=[Depends(csrf_guard)])
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+EXPIRED_MESSAGE = "That page had been open too long and the form expired. Please try again."
+
+
+@app.exception_handler(FormExpired)
+async def form_expired(request: Request, _exc: FormExpired) -> Response:
+    """Nothing was changed, so the reply is the page itself with a fresh token.
+    A login form reopened from history lands here, and sending it on to a bare
+    400 would leave no way forward."""
+    if request.url.path in ("/login", "/logout"):
+        return redirect("/login", err=EXPIRED_MESSAGE)
+    return render(request, "expired.html", status_code=400, err_msg=EXPIRED_MESSAGE)
 
 
 @app.middleware("http")

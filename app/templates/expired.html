@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>That form expired</h1>
+<p class="sub">Nothing was changed. The page you submitted had been open for a while, and the
+token that protects it had moved on since.</p>
+
+<div class="panel">
+  <div class="panel-body">
+    <p>This happens when a page is reopened from the browser history, left open in a second tab,
+    or sat untouched across a sign-in. Open the page again and it will work.</p>
+    <div class="form-actions">
+      <button class="btn primary" type="button" onclick="history.back()">Go back</button>
+      <a class="btn" href="/">Applications</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
