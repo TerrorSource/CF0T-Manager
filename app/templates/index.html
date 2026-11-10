@@ -24,6 +24,18 @@
   <a class="btn primary" href="/new">+ New application</a>
 </div>
 
+{% if rows %}
+<div class="filters" id="filters">
+  <button type="button" class="chip active" data-filter="" aria-pressed="true">All <span class="n">{{ rows|length }}</span></button>
+  <button type="button" class="chip" data-filter="bypass" aria-pressed="false"
+          title="A bypass policy is attached: whoever matches it is never asked to log in">Bypass <span class="n">{{ rows|selectattr('has_bypass')|list|length }}</span></button>
+  <button type="button" class="chip" data-filter="all-methods" aria-pressed="false"
+          title="Accepts every login method Cloudflare has configured, one-time PIN included">All methods <span class="n">{{ rows|selectattr('accepts_every_method')|list|length }}</span></button>
+  <button type="button" class="chip" data-filter="no-policy" aria-pressed="false"
+          title="Nothing decides who gets in">No policy <span class="n">{{ rows|rejectattr('policies')|list|length }}</span></button>
+</div>
+{% endif %}
+
 <div class="panel">
   {% if rows %}
   <div class="table-wrap">
@@ -37,12 +49,18 @@
     <tbody>
     {% for row in rows %}
       {% set methods = (row.allowed_idps | map('idp_name', meta.idp_names) | join(' ')) if row.allowed_idps else ('all methods' if row.has_app else '') %}
-      <tr data-search="{{ (row.hostname ~ ' ' ~ row.path ~ ' ' ~ row.service ~ ' ' ~ row.app_name ~ ' ' ~ (row.policies | map(attribute='name') | join(' ')) ~ ' ' ~ methods) | lower }}">
+      {% set flags = (['bypass'] if row.has_bypass else []) + (['all-methods'] if row.accepts_every_method else []) + ([] if row.policies else ['no-policy']) %}
+      <tr data-flags="{{ flags|join(' ') }}" data-search="{{ (row.hostname ~ ' ' ~ row.path ~ ' ' ~ row.service ~ ' ' ~ row.app_name ~ ' ' ~ (row.policies | map(attribute='name') | join(' ')) ~ ' ' ~ methods ~ (' bypass' if row.has_bypass else '') ~ (' open to everyone' if row.open_to_everyone else '')) | lower }}">
         <td>
           <a href="https://{{ row.hostname }}{{ row.path }}" target="_blank" rel="noopener">{{ row.hostname }}</a>
           {% if row.path %}<span class="mono" style="color:var(--muted)">{{ row.path }}</span>{% endif %}
           {% if row.dns_ok and not row.has_route and not row.has_app %}
           <span class="badge warn" title="DNS points at the tunnel, but there is no route or Access app">unused DNS</span>
+          {% endif %}
+          {% if row.open_to_everyone %}
+          <span class="badge warn" title="A bypass policy takes in everyone, so nobody is asked to log in. Only what the origin itself asks for stands in the way.">open to everyone</span>
+          {% elif row.bypass_only %}
+          <span class="badge warn" title="Every policy is a bypass: whoever matches one gets straight through without logging in, everyone else is refused.">bypass only</span>
           {% endif %}
           {% if row.app and not row.is_self_hosted %}
           <span class="badge" title="Not a tunnel-backed application, so it is managed in the Cloudflare dashboard">{{ row.app_type|replace('_', ' ') }}</span>
@@ -69,7 +87,7 @@
         <td>
           {% if row.policies %}
             <div class="badges">
-            {% for p in row.policies %}<span class="badge">{{ p.name }}</span>{% endfor %}
+            {% for p in row.policies %}<span class="badge {{ 'warn' if p.decision == 'bypass' }}"{% if p.decision %} title="Decision: {{ p.decision|replace('_', ' ') }}"{% endif %}>{{ p.name }}{% if p.decision and p.decision != 'allow' %} · {{ p.decision|replace('_', ' ') }}{% endif %}</span>{% endfor %}
             </div>
           {% else %}<span class="badge warn">no policy</span>{% endif %}
         </td>
@@ -99,7 +117,7 @@
   <div class="empty" id="no-matches" hidden>Nothing matches that search.</div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 // Filtering happens here rather than on the server: the overview takes several
 // round trips to Cloudflare, and none of them tell us anything new.
 (function () {
@@ -108,13 +126,16 @@
   const empty = document.getElementById('no-matches');
   if (!input) return;
   const rows = Array.from(document.querySelectorAll('tbody tr'));
+  const chips = Array.from(document.querySelectorAll('#filters .chip'));
+  let flag = '';
 
   function apply() {
     const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
     let shown = 0;
     for (const row of rows) {
       const haystack = row.dataset.search || '';
-      const match = terms.every(t => haystack.includes(t));
+      const flags = (row.dataset.flags || '').split(' ');
+      const match = terms.every(t => haystack.includes(t)) && (!flag || flags.includes(flag));
       row.hidden = !match;
       if (match) shown++;
     }
@@ -123,6 +144,16 @@
   }
   input.addEventListener('input', apply);
   input.addEventListener('search', apply);
+  for (const chip of chips) {
+    chip.addEventListener('click', () => {
+      flag = chip.dataset.filter;
+      for (const other of chips) {
+        other.classList.toggle('active', other === chip);
+        other.setAttribute('aria-pressed', other === chip ? 'true' : 'false');
+      }
+      apply();
+    });
+  }
 })();
 </script>
 {% endblock %}

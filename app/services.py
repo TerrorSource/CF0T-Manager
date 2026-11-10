@@ -51,6 +51,8 @@ class ServiceRow:
     app: dict | None = None
     dns: dict | None = None
     zone_id: str | None = None
+    # Reusable policies by id, to complete what the application listing says.
+    reusable: dict[str, dict] = field(default_factory=dict, repr=False)
 
     @property
     def key(self) -> str:
@@ -91,7 +93,34 @@ class ServiceRow:
 
     @property
     def policies(self) -> list[dict]:
-        return (self.app or {}).get("policies") or []
+        """As listed on the application, completed from the reusable policy it
+        points at wherever the listing left the decision out."""
+        out = []
+        for policy in (self.app or {}).get("policies") or []:
+            known = self.reusable.get(policy.get("id") or "")
+            out.append({**known, **policy} if known else policy)
+        return out
+
+    @property
+    def has_bypass(self) -> bool:
+        return any(is_bypass(p) for p in self.policies)
+
+    @property
+    def bypass_only(self) -> bool:
+        """Nobody is ever asked to log in: a request either matches a bypass
+        and goes straight through, or matches nothing and is refused."""
+        policies = self.policies
+        return bool(policies) and all(is_bypass(p) for p in policies)
+
+    @property
+    def open_to_everyone(self) -> bool:
+        """Cloudflare evaluates bypass policies before any other, so one that
+        takes in everyone makes the hostname public whatever else is attached."""
+        return any(bypasses_everyone(p) for p in self.policies)
+
+    @property
+    def accepts_every_method(self) -> bool:
+        return self.has_app and not self.allowed_idps
 
     @property
     def has_route(self) -> bool:
@@ -108,6 +137,20 @@ class ServiceRow:
 
 SELF_HOSTED = "self_hosted"
 ONE_TIME_PIN = "onetimepin"
+BYPASS = "bypass"
+
+
+def is_bypass(policy: dict) -> bool:
+    return (policy.get("decision") or "") == BYPASS
+
+
+def bypasses_everyone(policy: dict) -> bool:
+    """A bypass that includes everyone and is narrowed nowhere. Anything
+    unreadable counts as not open: this only ever labels what is certain."""
+    if not is_bypass(policy) or policy.get("exclude") or policy.get("require"):
+        return False
+    return any(isinstance(rule, dict) and "everyone" in rule
+               for rule in policy.get("include") or [])
 
 
 def is_one_time_pin(provider: dict) -> bool:
@@ -275,6 +318,13 @@ class ZeroTrustManager:
         except CloudflareError:
             return []
 
+    async def _safe_policies(self) -> list[dict]:
+        """Only used to complete the labels, so the overview survives without."""
+        try:
+            return await self.cf.list_policies()
+        except CloudflareError:
+            return []
+
     async def load_overview(self, with_dns: bool = True,
                             refresh: bool = False) -> tuple[list[ServiceRow], dict]:
         ready = self._fresh_enough(refresh)
@@ -293,18 +343,21 @@ class ZeroTrustManager:
     async def _load_overview(self, with_dns: bool) -> tuple[list[ServiceRow], dict]:
 
         if with_dns:
-            config, apps, (zones, dns_by_name, dns_error), providers = await asyncio.gather(
+            (config, apps, (zones, dns_by_name, dns_error), providers,
+             policies) = await asyncio.gather(
                 self.cf.get_tunnel_config(self.tunnel_id),
                 self.cf.list_access_apps(),
                 self._zones_and_dns(),
                 self._safe_providers(),
+                self._safe_policies(),
             )
         else:
-            config, apps, providers = await asyncio.gather(
+            config, apps, providers, policies = await asyncio.gather(
                 self.cf.get_tunnel_config(self.tunnel_id), self.cf.list_access_apps(),
-                self._safe_providers()
+                self._safe_providers(), self._safe_policies()
             )
             zones, dns_by_name, dns_error = [], {}, ""
+        reusable = {p["id"]: p for p in policies if p.get("id")}
 
         apps_by_domain: dict[tuple[str, str], dict] = {}
         for app in apps:
@@ -321,7 +374,8 @@ class ZeroTrustManager:
             app = apps_by_domain.get((host, path))
             if app and app.get("id"):
                 matched_app_ids.add(app["id"])
-            rows.append(ServiceRow(hostname=host, path=path, rule=rule, app=app))
+            rows.append(ServiceRow(hostname=host, path=path, rule=rule, app=app,
+                                   reusable=reusable))
 
         # Also show Access apps that have no matching tunnel route
         for (host, path), app in apps_by_domain.items():
@@ -329,7 +383,8 @@ class ZeroTrustManager:
                 continue
             matched_app_ids.add(app.get("id"))  # one row per app, on its own domain
             primary = app_hostnames(app)[0] if app_hostnames(app) else (host, path)
-            rows.append(ServiceRow(hostname=primary[0], path=primary[1], rule=None, app=app))
+            rows.append(ServiceRow(hostname=primary[0], path=primary[1], rule=None, app=app,
+                                   reusable=reusable))
 
         meta: dict[str, Any] = {
             "config": config, "apps": apps, "zones": zones,

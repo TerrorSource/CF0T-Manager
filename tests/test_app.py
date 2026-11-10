@@ -1179,3 +1179,30 @@ def test_dns_record_is_overwritten_once_confirmed():
     assert record["type"] == "CNAME"
     assert record["content"] == f"{TUNNEL}.cfargotunnel.com"
     assert record["proxied"] is True
+
+
+def test_every_response_carries_the_security_headers():
+    auth.reset_throttle()
+    fresh = TestClient(main.app)
+    r = fresh.get("/", follow_redirects=False)  # a redirect from the guard counts too
+    assert r.headers["x-frame-options"] == "DENY"
+    page = fresh.get("/login")
+    assert page.headers["x-content-type-options"] == "nosniff"
+    csp = page.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in csp and "'unsafe-inline'" not in csp.split("style-src")[0]
+    nonce = csp.split("'nonce-")[1].split("'")[0]
+    assert f'<script nonce="{nonce}">' in page.text, "the inline script may still run"
+
+
+def test_bypass_is_labelled_on_the_overview():
+    row = services.ServiceRow(hostname="ha.makooy.nl", app={"policies": [{"id": "p"}]},
+                              reusable={"p": {"id": "p", "name": "Everyone-Policy",
+                                              "decision": "bypass",
+                                              "include": [{"everyone": {}}]}})
+    assert row.has_bypass and row.bypass_only and row.open_to_everyone
+    limited = services.ServiceRow(hostname="x.makooy.nl", app={"policies": [
+        {"id": "q", "decision": "bypass", "include": [{"ip": {"ip": "1.2.3.4/32"}}]}]})
+    assert limited.bypass_only and not limited.open_to_everyone, "an IP bypass is not public"
+    plain = services.ServiceRow(hostname="y.makooy.nl", app={"policies": [
+        {"id": "r", "decision": "allow"}]})
+    assert not plain.has_bypass

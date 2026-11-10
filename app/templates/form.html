@@ -197,7 +197,7 @@
 </div>
 </form>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 // Prefill the application name from the hostname.
 const host = document.getElementById('hostname');
 const appName = document.getElementById('app_name');

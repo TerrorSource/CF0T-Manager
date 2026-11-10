@@ -57,6 +57,15 @@ p.sub { color: var(--muted); margin: 0 0 22px; }
 .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
 .toolbar input[type=search] { flex: 1; min-width: 220px; }
 
+.filters { display: flex; gap: 8px; flex-wrap: wrap; margin: -4px 0 16px; }
+.chip {
+  font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+}
+.chip:hover { color: var(--text); border-color: #3a414d; }
+.chip.active { background: var(--panel-2); color: var(--text); border-color: var(--accent-2); }
+.chip .n { margin-left: 5px; opacity: .65; }
+
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .panel + .panel { margin-top: 18px; }
 .panel-head { padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600; }

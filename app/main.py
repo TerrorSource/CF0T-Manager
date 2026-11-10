@@ -217,6 +217,7 @@ def render(request: Request, template: str, status_code: int = 200, **ctx) -> HT
     ctx.setdefault("err_msg", request.query_params.get("err", ""))
     ctx.setdefault("settings", settings)
     ctx.setdefault("tunnel_id", active_tunnel_id())
+    ctx.setdefault("csp_nonce", getattr(request.state, "csp_nonce", ""))
 
     token = request.cookies.get(CSRF_COOKIE) or secrets.token_hex(16)
     ctx["csrf_token"] = token
@@ -319,6 +320,38 @@ async def guard(request: Request, call_next):
     if not active_tunnel_id() and not path.startswith("/settings") and path != "/logout":
         return redirect("/settings", err="Pick a tunnel first.")
     return await call_next(request)
+
+
+def content_security_policy(nonce: str) -> str:
+    """Scripts only run when they carry this response's nonce, so markup that
+    slipped through somewhere cannot execute. Styles stay inline-friendly: the
+    templates use style attributes, and a style cannot delete an application."""
+    return "; ".join((
+        "default-src 'self'",
+        f"script-src 'self' 'nonce-{nonce}'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    ))
+
+
+# Added after guard, which makes it the outer layer: the redirects guard hands
+# out get the headers as well.
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """This page has Delete buttons, so it must not be framed by another site
+    (clickjacking), nor have its responses second-guessed by the browser."""
+    nonce = secrets.token_urlsafe(16)
+    request.state.csp_nonce = nonce
+    response = await call_next(request)
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("Content-Security-Policy", content_security_policy(nonce))
+    return response
 
 
 @app.get("/healthz")

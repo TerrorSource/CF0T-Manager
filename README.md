@@ -175,13 +175,23 @@ touched, whatever it points at now.
 - **Settings do not survive a restart** — the container could not take ownership
   of the mounted folder. The log says so at startup; `chown -R 1000:1000` on the
   folder from the NAS side fixes it.
+- **The right password keeps landing back on the login page** — *Only send the
+  session cookie over https* is on while you opened the page on a plain `http://`
+  address, such as the NAS IP. The browser throws the cookies away, so the login
+  can never complete; the login page says so when it sees this. Open the tool
+  over https, or add `CF0T_SECURE_COOKIE=false` to the stack variables and
+  restart: the variable overrides the checkbox.
 
 ## Safety
 
 The page can delete routes, applications and DNS records, so give it a real
 password and **do not open port 8099 to the internet**. Better: add it to
 Cloudflare Zero Trust as an application of its own, behind your usual policy,
-and switch on *Only send the session cookie over https* under Settings.
+and switch on *Only send the session cookie over https* under Settings. Do that
+only if you then always use the https address: with the switch on, the plain
+`http://<your-nas-ip>:8099` address can no longer log in. `CF0T_SECURE_COOKIE`
+in the stack variables overrides the switch, so `CF0T_SECURE_COOKIE=false`
+always gets you back in.
 
 Ten wrong passwords from one address lock it out for fifteen minutes, and fifty
 across all addresses lock the login itself, which is what actually stops someone

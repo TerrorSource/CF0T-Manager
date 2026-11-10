@@ -30,7 +30,7 @@
   {% if err_msg %}<div class="flash err">{{ err_msg }}</div>{% endif %}
   {% block content %}{% endblock %}
 </main>
-<script>
+<script nonce="{{ csp_nonce }}">
 // A pinned actions column only needs its shadow while a row slides under it.
 // Resizing can leave the table wide enough again, so the state is synced then too.
 (function () {
