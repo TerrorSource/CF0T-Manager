@@ -1206,3 +1206,120 @@ def test_bypass_is_labelled_on_the_overview():
     plain = services.ServiceRow(hostname="y.makooy.nl", app={"policies": [
         {"id": "r", "decision": "allow"}]})
     assert not plain.has_bypass
+
+
+# ------------------------------------------------------------------ drift ---
+def _fresh_backup_and_log():
+    reset_state()
+    login()
+    for item in backups.listing():
+        backups.remove(item["name"])
+    (settings.data_dir / changelog.FILE).unlink(missing_ok=True)
+    r = post(tc, "/backup/create", follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+
+
+def test_drift_tells_dashboard_changes_from_our_own():
+    """The change log only knows what this tool did. Comparing with a backup
+    has to show the rest, and must not blame the dashboard for our own work."""
+    from app import drift
+    _fresh_backup_and_log()
+
+    # Through the tool.
+    post(tc, "/new", data={
+        "hostname": "grafana", "zone": "makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "3000",
+    }, follow_redirects=False)
+
+    # Behind its back, as the Cloudflare dashboard would.
+    STATE["config"]["ingress"].insert(0, {"hostname": "rogue.makooy.nl",
+                                          "service": "http://10.0.0.5:80"})
+    STATE["apps"][0]["allowed_idps"] = []
+    STATE["dns"].append({"id": "dns9", "type": "A", "name": "mail.makooy.nl",
+                         "content": "203.0.113.7", "proxied": False})
+    services.invalidate_overview()
+
+    page = tc.get("/drift")
+    assert page.status_code == 200
+    outside, through = page.text.split("Made through this tool")
+    assert "rogue.makooy.nl" in outside and "10.0.0.5" in outside
+    assert "Sonarr" in outside and "every method" in outside, "the login methods were widened"
+    assert "mail.makooy.nl" in outside
+    assert "grafana.makooy.nl" not in outside, "our own change is not blamed on the dashboard"
+    assert "grafana.makooy.nl" in through and "created" in through
+
+
+def test_drift_with_nothing_changed_and_with_no_backup():
+    _fresh_backup_and_log()
+    page = tc.get("/drift").text
+    assert "Nothing was changed outside this tool" in page
+
+    for item in backups.listing():
+        backups.remove(item["name"])
+    assert "no backup to compare with" in tc.get("/drift").text
+
+
+def test_a_rename_is_explained_by_the_log():
+    """Without the old name in the log, a rename through this tool reads as one
+    hostname vanishing for no reason."""
+    _fresh_backup_and_log()
+    post(tc, "/edit", data={
+        "original_hostname": "sonarr.makooy.nl", "original_path": "",
+        "hostname": "series.makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "8989",
+        "create_app": "1", "app_name": "Sonarr", "session_duration": "24h",
+        "allowed_idps": ["idp-google"], "policies": ["pol1"], "launcher_visible": "1",
+    }, follow_redirects=False)
+    assert "renamed from sonarr.makooy.nl" in changelog.entries()[0]["detail"]
+
+    outside = tc.get("/drift").text.split("Made through this tool")[0]
+    assert "sonarr.makooy.nl" not in outside and "series.makooy.nl" not in outside
+
+
+def test_drift_comparison_details():
+    from app import drift
+    base = {"tunnel_config": {"ingress": [{"hostname": "a.x.nl", "service": "http://1:1"},
+                                          {"hostname": "b.x.nl", "service": "http://2:2"},
+                                          {"service": "http_status:404"}]},
+            "access_apps": [{"id": "1", "name": "A", "domain": "a.x.nl", "policies": []}],
+            "policies": [{"id": "p", "name": "Everyone", "decision": "allow",
+                          "include": [{"everyone": {}}], "app_count": 1}],
+            "dns_zones": []}
+    live = json.loads(json.dumps(base))
+    # Bookkeeping and spelled-out defaults are not changes.
+    live["policies"][0]["app_count"] = 4
+    live["access_apps"][0]["allowed_idps"] = []
+    live["access_apps"][0]["updated_at"] = "2026-11-11T00:00:00Z"
+    differences, notes = drift.compare(base, live)
+    assert differences == [], differences
+    assert any("no DNS records" in n for n in notes), "a backup without DNS says so"
+
+    live["policies"][0]["decision"] = "bypass"
+    live["tunnel_config"]["ingress"][:2] = reversed(live["tunnel_config"]["ingress"][:2])
+    differences, _ = drift.compare(base, live)
+    found = {(d["kind"], d["name"]): d for d in differences}
+    assert "decision: allow → bypass" in found[("policy", "Everyone")]["details"]
+    assert ("route", "route order") in found
+
+    # A policy change is never ours; a reorder is, when the log says so.
+    drift.attribute(differences, [{"at": "2026-11-11T10:00:00Z", "action": "reordered",
+                                   "target": "a.x.nl", "detail": "moved up"}], "2026-11-01T00:00:00Z")
+    assert found[("route", "route order")]["logged"] and not found[("policy", "Everyone")]["logged"]
+
+    assert drift._mentions("renamed from ha.x.nl", "ha.x.nl")
+    assert not drift._mentions("alpha.x.nl", "ha.x.nl"), "a hostname only matches as a whole"
+
+
+def test_work_that_stopped_halfway_is_still_logged():
+    """A DNS conflict leaves the route and the application created. That used
+    to stay out of the change log altogether."""
+    _fresh_backup_and_log()
+    STATE["dns"].append({"id": "dns8", "type": "A", "name": "taken.makooy.nl",
+                         "content": "198.51.100.4", "proxied": False})
+    r = post(tc, "/new", data={
+        "hostname": "taken", "zone": "makooy.nl", "scheme": "http",
+        "origin_host": "192.168.1.9", "origin_port": "3000", "create_dns": "1",
+    }, follow_redirects=False)
+    assert "already has a DNS record" in r.text
+    newest = changelog.entries()[0]
+    assert newest["target"] == "taken.makooy.nl" and "left for you to decide" in newest["detail"]

@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import auth, backups, cf, changelog, services
+from . import auth, backups, cf, changelog, drift, services
 from .cf import CloudflareClient, CloudflareError
 from .config import active_tunnel_id, set_active_tunnel_id, settings
 from .services import ZeroTrustManager
@@ -187,6 +187,14 @@ def manager() -> ZeroTrustManager:
 DATA_UNWRITABLE = ("Could not write to the /data volume: {error}. "
                    "Nothing was saved. Check that the mounted folder is writable "
                    "by the user the container runs as (uid 1000).")
+
+
+def log_partial(action: str, target: str, steps: list[str], request: Request,
+                why: str) -> None:
+    """Work that stopped halfway still happened, so it still belongs in the
+    change log - otherwise it later reads as something done elsewhere."""
+    if steps:
+        changelog.record(action, target, f"{', '.join(steps)} ({why})", client_ip(request))
 
 
 def client_ip(request: Request) -> str:
@@ -806,8 +814,10 @@ async def new_submit(request: Request):
             zones = await client().list_zones()
             steps.append(await mgr.ensure_dns(hostname, zones))
     except services.DnsConflict as conflict:
+        log_partial("created", hostname + path, steps, request, "DNS record left for you to decide")
         return render(request, "dns_conflict.html", conflict=conflict, steps=steps)
     except CloudflareError as exc:
+        log_partial("created", hostname + path, steps, request, "then stopped on an error")
         done = ", ".join(steps) or "nothing"
         return redirect("/", err=f"{exc} — already done: {done}.")
 
@@ -885,6 +895,9 @@ async def edit_submit(request: Request):
         return confirmation_page(request, "/edit", form, warnings)
 
     steps: list[str] = []
+    # The old name goes into the log too: without it a rename reads as one
+    # hostname appearing and another vanishing with no explanation.
+    renamed_from = [f"renamed from {original_host}"] if hostname != original_host else []
     try:
         if row.has_route:
             await mgr.save_route(hostname, path, service, origin, original_host, original_path)
@@ -925,13 +938,18 @@ async def edit_submit(request: Request):
                 steps.append(f"{original_host} still has a DNS record of its own, "
                              f"listed on the overview so you can remove it")
     except services.DnsConflict as conflict:
+        log_partial("edited", hostname + path, renamed_from + steps if steps else [], request,
+                    "DNS record left for you to decide")
         return render(request, "dns_conflict.html", conflict=conflict, steps=steps)
     except CloudflareError as exc:
+        log_partial("edited", hostname + path, renamed_from + steps if steps else [], request,
+                    "then stopped on an error")
         done = ", ".join(steps) or "nothing"
         return redirect("/", err=f"{exc} — already done: {done}.")
 
     if steps:
-        changelog.record("edited", hostname + path, ", ".join(steps), client_ip(request))
+        changelog.record("edited", hostname + path, ", ".join(renamed_from + steps),
+                         client_ip(request))
     return redirect("/", ok=f"{hostname}: " + ", ".join(steps or ["no changes"]))
 
 
@@ -990,6 +1008,7 @@ async def delete_submit(request: Request):
             zones = await client().list_zones()
             steps.append(await mgr.delete_dns(hostname, zones, record_ids))
     except CloudflareError as exc:
+        log_partial("deleted", hostname + path, steps, request, "then stopped on an error")
         done = ", ".join(steps) or "nothing"
         return redirect("/", err=f"{exc} — already done: {done}.")
 
@@ -1054,6 +1073,39 @@ async def routes_move(request: Request, hostname: str = Form(""), path: str = Fo
 @app.get("/changes", response_class=HTMLResponse)
 async def changes_page(request: Request):
     return render(request, "changes.html", entries=changelog.entries())
+
+
+@app.get("/drift", response_class=HTMLResponse)
+async def drift_page(request: Request):
+    """The live configuration next to a stored backup. The change log only
+    knows what this tool did; this shows what happened anywhere else."""
+    stored = backups.listing()
+    if not stored:
+        return render(request, "drift.html", stored=[], chosen="", result=None)
+
+    chosen = request.query_params.get("against") or stored[0]["name"]
+    backup = backups.read(chosen)
+    if backup is None or not backups.is_ours(backup.get("format") or ""):
+        return render(request, "drift.html", stored=stored, chosen="", result=None,
+                      err_msg="That backup could not be read.")
+    try:
+        live, providers = await asyncio.gather(collect_backup("comparison"),
+                                               safe_identity_providers())
+    except CloudflareError as exc:
+        return render(request, "drift.html", stored=stored, chosen=chosen, result=None,
+                      err_msg=str(exc))
+
+    idp_names = {p["id"]: services.provider_label(p) for p in providers if p.get("id")}
+    differences, notes = drift.compare(backup, live, idp_names)
+    notes += drift.attribute(differences, changelog.entries(changelog.MAX_LINES),
+                             backup.get("exported_at") or "")
+    result = {
+        "outside": [d for d in differences if not d["logged"]],
+        "through": [d for d in differences if d["logged"]],
+        "notes": notes,
+        "when": next((e["when"] for e in stored if e["name"] == chosen), ""),
+    }
+    return render(request, "drift.html", stored=stored, chosen=chosen, result=result)
 
 
 # ---------------------------------------------------------------- backup ---
@@ -1213,6 +1265,8 @@ async def backup_apply(request: Request, token: str = Form(""), restore_routes: 
                          + (f", left {skipped} existing one(s) alone" if skipped else "")
                          + (f", could not reach {', '.join(unreachable)}" if unreachable else ""))
     except CloudflareError as exc:
+        log_partial("restored", data.get("tunnel", {}).get("name", "tunnel"), steps, request,
+                    "then stopped on an error")
         return redirect("/backup", err=f"{exc} — already done: {', '.join(steps) or 'nothing'}.")
     finally:
         path.unlink(missing_ok=True)

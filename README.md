@@ -41,7 +41,10 @@ and the new value and decide yourself.
 Open `http://<your-nas-ip>:8099`. Four tabs:
 
 - **Applications** — every hostname on the tunnel, with its origin, Access app,
-  policies and DNS status. Search filters as you type. A record still pointing at
+  policies and DNS status. Search filters as you type, and the buttons above the
+  table narrow it to applications with a bypass policy, with every login method
+  allowed, or with no policy at all. A hostname that a bypass policy opens to
+  everyone is labelled as such. A record still pointing at
   the tunnel without a route or application behind it is flagged *unused DNS*, so
   leftovers from a rename do not go unnoticed. An application covering more than
   one hostname shows up under each of them. SaaS, infrastructure and the other
@@ -57,7 +60,9 @@ Open `http://<your-nas-ip>:8099`. Four tabs:
 - **Backup** — download the whole configuration, or keep copies in `/data`.
   Restoring always shows the difference first.
 - **Changes** — what this tool changed, when, and from which address. Changes
-  you make in the Cloudflare dashboard itself are not in there.
+  you make in the Cloudflare dashboard itself are not in there; *Changed outside
+  this tool* finds those by comparing Cloudflare as it is now with one of your
+  backups, and sets apart whatever the change log already accounts for.
 - **Settings** — API token, which tunnel to manage, your password, session
   length, and the backup schedule.
 

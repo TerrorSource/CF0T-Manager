@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% set wide_page = true %}
+{% set active_page = 'changes' %}
+{% macro listing(items, logged) %}
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>What</th><th>Name</th><th>Change</th><th>Details</th>{% if logged %}<th>Logged as</th>{% endif %}</tr>
+    </thead>
+    <tbody>
+    {% for item in items %}
+      <tr>
+        <td><span class="badge">{{ 'DNS record' if item.kind == 'dns' else item.kind }}</span></td>
+        <td>{{ item.name }}</td>
+        <td><span class="badge {{ 'ok' if item.change == 'added' else 'warn' }}">{{ item.change }}</span></td>
+        <td class="hint">{% for line in item.details %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+        {% if logged %}
+        <td class="hint">{% for entry in item.logged[:3] %}{{ entry.action }} · {{ entry.when }}{% if not loop.last %}<br>{% endif %}{% endfor %}{% if item.logged|length > 3 %}<br>and {{ item.logged|length - 3 }} more{% endif %}</td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+{% endmacro %}
+{% block content %}
+<h1>Changed outside this tool</h1>
+<p class="sub">Cloudflare as it is right now, next to one of your backups. Whatever the
+<a href="/changes">change log</a> accounts for is listed apart; the rest was changed somewhere
+else, usually in the Cloudflare dashboard. Nothing on this page changes anything.</p>
+
+{% if not stored %}
+<div class="panel">
+  <div class="empty">There is no backup to compare with yet.
+    <a href="/backup">Make one on the Backup page →</a></div>
+</div>
+{% else %}
+<form method="get" action="/drift" class="toolbar">
+  <label for="against" style="margin:0">Compare with</label>
+  <select id="against" name="against" style="flex:1; min-width:240px; max-width:520px">
+    {% for item in stored %}
+    <option value="{{ item.name }}" {{ 'selected' if item.name == chosen }}>{{ item.when }} · {{ {'auto': 'automatic', 'predelete': 'before a delete', 'manual': 'by hand'}[item.kind] }}{% if item.dns == 0 %} · no DNS{% endif %}</option>
+    {% endfor %}
+  </select>
+  <button class="btn" type="submit">Compare</button>
+</form>
+{% if stored|length > 1 %}
+<p class="hint" style="margin:-6px 0 18px">A change from before the chosen backup is already part
+of that backup. Pick an older one to look further back.</p>
+{% endif %}
+
+{% if result %}
+{% for note in result.notes %}<div class="flash warn">{{ note }}</div>{% endfor %}
+
+<div class="panel">
+  <div class="panel-head">Not made through this tool <span class="hint">· {{ result.outside|length }} since {{ result.when }}</span></div>
+  {% if result.outside %}
+    {{ listing(result.outside, false) }}
+  {% else %}
+  <div class="empty">Nothing was changed outside this tool since that backup.</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="panel-head">Made through this tool <span class="hint">· {{ result.through|length }}</span></div>
+  {% if result.through %}
+    {{ listing(result.through, true) }}
+  {% else %}
+  <div class="empty">Nothing here differs from the backup because of this tool.</div>
+  {% endif %}
+</div>
+
+<p class="hint" style="margin-top:16px">A difference counts as made here when the change log has an entry for that
+hostname since the backup was taken. If the dashboard changed the same hostname as well, it
+still ends up in the second list. Policies are never changed by this tool, so those are always
+in the first.</p>
+{% endif %}
+{% endif %}
+{% endblock %}
